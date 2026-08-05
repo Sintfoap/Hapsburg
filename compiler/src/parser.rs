@@ -191,6 +191,7 @@ impl Parser {
     fn parse_stmt(&mut self) -> PResult<Stmt> {
         match self.cur() {
             Tok::Let => {
+                let line = self.line();
                 self.bump();
                 let name = self.expect_ident()?;
                 let ty = if *self.cur() == Tok::Colon {
@@ -205,7 +206,7 @@ impl Parser {
                 } else {
                     None
                 };
-                Ok(Stmt::Let(name, ty, init))
+                Ok(Stmt::Let(name, ty, init, line))
             }
             Tok::Succession => {
                 self.bump();

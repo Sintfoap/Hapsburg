@@ -122,7 +122,7 @@ pub enum BinOp {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Let(String, Option<Type>, Option<Expr>),
+    Let(String, Option<Type>, Option<Expr>, usize),
     Assign(Expr, Expr),
     ExprStmt(Expr),
     Succession { iter: Expr, binder: Option<String>, body: Vec<Stmt> },

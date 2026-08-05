@@ -239,12 +239,15 @@ from the repo root) and a C compiler on `PATH` are all you need.
   syntax rules (no tree-sitter grammar to compile) for filetype
   detection and highlighting of `.hb` files. See `editors/nvim/README.md`
   for install instructions.
-- **LSP**: `lsp/` — `hapsburg-lsp`, a minimal language server that runs
-  the real compiler's parser and resolver in-memory and publishes
-  `InbreedingError`, the founder/diamond/genetic-diversity checks, and
-  the "single line of descent" warnings as live diagnostics. Diagnostics
-  only for now (no completion/hover) — see `lsp/README.md` for what it
-  does and doesn't cover, and the `nvim-lspconfig` snippet to wire it up.
+- **LSP**: `lsp/` — `hapsburg-lsp`, a language server that runs the real
+  compiler's parser, resolver, and a dry-run codegen in-memory. Live
+  diagnostics (`InbreedingError`, the founder/diamond/genetic-diversity
+  checks, "single line of descent" warnings); hover with real resolved
+  data (a dynasty's actual C3 pedigree and trait/method list, a local
+  variable's actual inferred type — not guesses); document symbols;
+  go-to-definition; and completion. See `lsp/README.md` for exactly what
+  it does and doesn't cover, and the `nvim-lspconfig` snippet to wire it
+  up.
 
 ## Repo layout
 

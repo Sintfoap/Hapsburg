@@ -1,6 +1,7 @@
-use ferdinand::codegen::Codegen;
-use ferdinand::parser;
-use ferdinand::resolve::Resolver;
+mod analysis;
+mod docs_static;
+
+use analysis::DocAnalysis;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
@@ -9,94 +10,143 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
     client: Client,
-    docs: Mutex<HashMap<Url, String>>,
+    docs: Mutex<HashMap<Url, (String, DocAnalysis)>>,
 }
 
 impl Backend {
-    async fn publish_diagnostics(&self, uri: Url) {
-        let text = match self.docs.lock().unwrap().get(&uri) {
-            Some(t) => t.clone(),
-            None => return,
-        };
-        let diagnostics = analyze(&text);
-        self.client.publish_diagnostics(uri, diagnostics, None).await;
+    async fn set_text_and_publish(&self, uri: Url, text: String) {
+        let analysis = analysis::analyze(&text);
+        let diags = analysis.diagnostics.clone();
+        self.docs.lock().unwrap().insert(uri.clone(), (text, analysis));
+        self.client.publish_diagnostics(uri, diags, None).await;
+    }
+
+    async fn republish(&self, uri: Url) {
+        let existing = self.docs.lock().unwrap().get(&uri).map(|(t, _)| t.clone());
+        if let Some(text) = existing {
+            self.set_text_and_publish(uri, text).await;
+        }
+    }
+
+    fn with_doc<T>(&self, uri: &Url, f: impl FnOnce(&str, &DocAnalysis) -> T) -> Option<T> {
+        let docs = self.docs.lock().unwrap();
+        let (text, analysis) = docs.get(uri)?;
+        Some(f(text, analysis))
     }
 }
 
-/// ferdinand's own errors are plain strings, most (but not all — see
-/// README) carrying a "line N" marker. Best-effort extraction rather than
-/// real span tracking through the whole compiler; falls back to the top
-/// of the file when a message doesn't name a line.
-fn line_from_message(msg: &str) -> u32 {
-    if let Some(idx) = msg.find("line ") {
-        let rest = &msg[idx + 5..];
-        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(n) = digits.parse::<u32>() {
-            if n > 0 {
-                return n - 1; // LSP positions are 0-indexed
+/// Extract the identifier (or `::`-qualified path) under a cursor position
+/// by scanning the raw source line — not an AST position lookup, since the
+/// AST doesn't carry column spans (see README). Good enough to drive
+/// hover/definition/completion by name.
+fn word_at(text: &str, pos: Position) -> Option<(String, Range)> {
+    let line = text.lines().nth(pos.line as usize)?;
+    let chars: Vec<char> = line.chars().collect();
+    let idx = (pos.character as usize).min(chars.len());
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == ':';
+
+    let mut start = idx;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = idx;
+    while end < chars.len() && is_word(chars[end]) {
+        end += 1;
+    }
+    if start == end {
+        return None;
+    }
+    let raw: String = chars[start..end].iter().collect();
+    let trimmed = raw.trim_matches(':');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some((
+        trimmed.to_string(),
+        Range::new(Position::new(pos.line, start as u32), Position::new(pos.line, end as u32)),
+    ))
+}
+
+fn class_hover(info: &analysis::ClassInfo) -> String {
+    let mut s = format!("**dynasty {}**", info.name);
+    if info.founder {
+        s.push_str(" *(founder)*");
+    }
+    if !info.parents.is_empty() {
+        s.push_str(&format!("  \ndescends `{}`", info.parents.join("`, `")));
+    }
+    if info.pedigree.len() > 1 {
+        s.push_str(&format!("\n\n**Pedigree:** `{}`", info.pedigree.join(" -> ")));
+    }
+    if !info.traits.is_empty() {
+        s.push_str("\n\n**Traits:**\n");
+        for t in &info.traits {
+            s.push_str(&format!("- `{}: {}`\n", t.name, t.ty_display));
+        }
+    }
+    if !info.methods.is_empty() {
+        s.push_str("\n**Methods:**\n");
+        for m in &info.methods {
+            let mut line = format!("- `{}`", m.sig_display);
+            if m.is_abstract {
+                line.push_str(" *(abstract)*");
             }
+            if m.owner != info.name {
+                line.push_str(&format!(" — inherited from `{}`", m.owner));
+            }
+            s.push_str(&line);
+            s.push('\n');
         }
     }
-    0
+    s
 }
 
-fn diagnostic(msg: &str, severity: DiagnosticSeverity) -> Diagnostic {
-    let line = line_from_message(msg);
-    let range = Range::new(Position::new(line, 0), Position::new(line, u32::MAX));
-    Diagnostic {
-        range,
-        severity: Some(severity),
-        source: Some("ferdinand".to_string()),
-        message: msg.to_string(),
-        ..Diagnostic::default()
-    }
+/// Which class/method "contains" a line, approximated from declaration
+/// start lines only (the AST has no end positions) — the class/method
+/// whose start line is the closest one at-or-before `line`.
+fn enclosing_class<'a>(analysis: &'a DocAnalysis, line: u32) -> Option<&'a analysis::ClassInfo> {
+    analysis
+        .class_order
+        .iter()
+        .filter(|(l, _)| *l <= line)
+        .max_by_key(|(l, _)| *l)
+        .and_then(|(_, name)| analysis.classes.get(name))
 }
 
-/// Run the real compiler pipeline (parse -> resolve -> codegen) purely
-/// in-memory, no C emitted and no `cc` invoked, and turn whatever it
-/// reports into diagnostics. Stops at the first hard error, same as
-/// ferdinand itself does on the command line.
-fn analyze(text: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-
-    let program = match parser::parse(text) {
-        Ok(p) => p,
-        Err(e) => {
-            out.push(diagnostic(&e, DiagnosticSeverity::ERROR));
-            return out;
-        }
-    };
-
-    let mut resolver = match Resolver::new(&program) {
-        Ok(r) => r,
-        Err(e) => {
-            out.push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
-            return out;
-        }
-    };
-
-    if let Err(e) = resolver.check_all() {
-        out.push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
-        return out;
+fn hover_text(analysis: &DocAnalysis, word: &str, line: u32) -> Option<String> {
+    if let Some(info) = analysis.classes.get(word) {
+        return Some(class_hover(info));
     }
-
-    for w in resolver.warnings() {
-        out.push(diagnostic(w, DiagnosticSeverity::WARNING));
+    if let Some(doc) = docs_static::KEYWORDS.iter().find(|(k, _)| *k == word) {
+        return Some(format!("**{}** (keyword)\n\n{}", word, doc.1));
     }
-
-    let mut cg = Codegen::new(&resolver);
-    let birthed = cg.discover_birthed(&program);
-    for class in &birthed {
-        if let Err(e) = cg.gen_class(class) {
-            out.push(diagnostic(&e, DiagnosticSeverity::ERROR));
-            return out;
+    if let Some(doc) = docs_static::BUILTINS.iter().find(|(k, _)| *k == word) {
+        return Some(format!("**{}**\n\n{}", word, doc.1));
+    }
+    if let Some((_, name, ty)) = analysis
+        .var_hints
+        .iter()
+        .filter(|(l, n, _)| *l <= line && n == word)
+        .max_by_key(|(l, _, _)| *l)
+    {
+        return Some(format!("```\n{}: {}\n```\n*(local binding)*", name, ty));
+    }
+    if let Some(class) = enclosing_class(analysis, line) {
+        if let Some(t) = class.traits.iter().find(|t| t.name == word) {
+            return Some(format!("`{}: {}`\n\ntrait of `{}`", t.name, t.ty_display, class.name));
+        }
+        if let Some(m) = class.methods.iter().find(|m| m.name == word) {
+            let mut s = format!("`{}`", m.sig_display);
+            if m.is_abstract {
+                s.push_str(" *(abstract)*");
+            }
+            if m.owner != class.name {
+                s.push_str(&format!("\n\ninherited from `{}`", m.owner));
+            }
+            return Some(s);
         }
     }
-    if let Err(e) = cg.gen_main(&program) {
-        out.push(diagnostic(&e, DiagnosticSeverity::ERROR));
-    }
-
-    out
+    None
 }
 
 #[tower_lsp::async_trait]
@@ -105,6 +155,10 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions::default()),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -125,27 +179,146 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
-        self.docs.lock().unwrap().insert(uri.clone(), params.text_document.text);
-        self.publish_diagnostics(uri).await;
+        self.set_text_and_publish(params.text_document.uri, params.text_document.text).await;
     }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.clone();
         if let Some(change) = params.content_changes.pop() {
-            self.docs.lock().unwrap().insert(uri.clone(), change.text);
+            self.set_text_and_publish(params.text_document.uri, change.text).await;
         }
-        self.publish_diagnostics(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        self.publish_diagnostics(params.text_document.uri).await;
+        self.republish(params.text_document.uri).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.docs.lock().unwrap().remove(&uri);
         self.client.publish_diagnostics(uri, vec![], None).await;
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let result = self.with_doc(&uri, |text, analysis| {
+            let (word, range) = word_at(text, pos)?;
+            let content = hover_text(analysis, &word, pos.line)?;
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: content }),
+                range: Some(range),
+            })
+        });
+        Ok(result.flatten())
+    }
+
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let result = self.with_doc(&uri, |text, analysis| {
+            let (word, _) = word_at(text, pos)?;
+            let class = analysis.classes.get(&word)?;
+            let range = Range::new(Position::new(class.line, 0), Position::new(class.line, u32::MAX));
+            Some(GotoDefinitionResponse::Scalar(Location::new(uri.clone(), range)))
+        });
+        Ok(result.flatten())
+    }
+
+    async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        let result = self.with_doc(&uri, |text, analysis| {
+            let total_lines = text.lines().count() as u32;
+            let mut order = analysis.class_order.clone();
+            order.sort_by_key(|(l, _)| *l);
+            let mut symbols = Vec::new();
+            for (i, (start, name)) in order.iter().enumerate() {
+                let end = order.get(i + 1).map(|(l, _)| *l).unwrap_or(total_lines);
+                let Some(info) = analysis.classes.get(name) else { continue };
+                let range = Range::new(Position::new(*start, 0), Position::new(end, 0));
+                let selection = Range::new(Position::new(*start, 0), Position::new(*start, u32::MAX));
+
+                let mut children = Vec::new();
+                for t in &info.traits {
+                    children.push(make_symbol(
+                        &t.name,
+                        Some(t.ty_display.clone()),
+                        SymbolKind::FIELD,
+                        Range::new(Position::new(t.line, 0), Position::new(t.line, u32::MAX)),
+                    ));
+                }
+                for m in &info.methods {
+                    children.push(make_symbol(
+                        &m.name,
+                        Some(m.sig_display.clone()),
+                        SymbolKind::METHOD,
+                        Range::new(Position::new(m.line, 0), Position::new(m.line, u32::MAX)),
+                    ));
+                }
+
+                #[allow(deprecated)]
+                symbols.push(DocumentSymbol {
+                    name: name.clone(),
+                    detail: if info.founder { Some("founder".to_string()) } else { None },
+                    kind: SymbolKind::CLASS,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: selection,
+                    children: if children.is_empty() { None } else { Some(children) },
+                });
+            }
+            DocumentSymbolResponse::Nested(symbols)
+        });
+        Ok(result)
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let result = self.with_doc(&uri, |_text, analysis| {
+            let mut items = Vec::new();
+            for (name, doc) in docs_static::KEYWORDS.iter() {
+                items.push(CompletionItem {
+                    label: name.to_string(),
+                    kind: Some(CompletionItemKind::KEYWORD),
+                    detail: Some("keyword".to_string()),
+                    documentation: Some(Documentation::String(doc.to_string())),
+                    ..Default::default()
+                });
+            }
+            for (name, doc) in docs_static::BUILTINS.iter() {
+                items.push(CompletionItem {
+                    label: name.to_string(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: Some("builtin".to_string()),
+                    documentation: Some(Documentation::String(doc.to_string())),
+                    ..Default::default()
+                });
+            }
+            for name in analysis.classes.keys() {
+                items.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some("dynasty".to_string()),
+                    ..Default::default()
+                });
+            }
+            items
+        });
+        Ok(result.map(CompletionResponse::Array))
+    }
+}
+
+fn make_symbol(name: &str, detail: Option<String>, kind: SymbolKind, range: Range) -> DocumentSymbol {
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: name.to_string(),
+        detail,
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: None,
     }
 }
 

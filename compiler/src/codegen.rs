@@ -29,6 +29,22 @@ impl HType {
             HType::Class(name) => format!("Hb_{}*", mangle(name)),
         }
     }
+
+    /// How this type reads in Hapsburg source, not C — for hover text and
+    /// diagnostics aimed at someone editing a `.hb` file.
+    pub fn hapsburg_display(&self) -> String {
+        match self {
+            HType::Int => "Integer".into(),
+            HType::Str => "String".into(),
+            HType::Bool => "Bool".into(),
+            HType::Void => "Void".into(),
+            HType::ListInt => "List<Integer>".into(),
+            HType::ListStr => "List<String>".into(),
+            HType::ListListInt => "List<List<Integer>>".into(),
+            HType::Accumulator => "Habsburg::Accumulator".into(),
+            HType::Class(name) => name.clone(),
+        }
+    }
 }
 
 fn mangle(joined_path: &str) -> String {
@@ -98,6 +114,12 @@ pub struct Codegen<'a> {
     pub func_decls: String,
     pub func_impls: String,
     lambda_ctr: usize,
+    /// (source line, variable name, inferred type) for every `let` and
+    /// method parameter seen while generating code — recorded purely as a
+    /// side channel for tooling (the LSP's hover), unused by codegen
+    /// itself. Populated even for classes whose codegen later fails,
+    /// since the failure only affects statements *after* the error.
+    pub var_hints: Vec<(usize, String, HType)>,
 }
 
 type CResult<T> = Result<T, String>;
@@ -110,6 +132,7 @@ impl<'a> Codegen<'a> {
             func_decls: String::new(),
             func_impls: String::new(),
             lambda_ctr: 0,
+            var_hints: Vec::new(),
         }
     }
 
@@ -199,8 +222,8 @@ impl<'a> Codegen<'a> {
         }
         fn walk_stmt(s: &Stmt, found: &mut Vec<String>) {
             match s {
-                Stmt::Let(_, _, Some(e)) => walk_expr(e, found),
-                Stmt::Let(_, _, None) => {}
+                Stmt::Let(_, _, Some(e), _) => walk_expr(e, found),
+                Stmt::Let(_, _, None, _) => {}
                 Stmt::Assign(l, r) => {
                     walk_expr(l, found);
                     walk_expr(r, found);
@@ -292,6 +315,7 @@ impl<'a> Codegen<'a> {
         for p in &m.params {
             let pty = self.type_of_annotation(&p.ty)?;
             params_c.push_str(&format!(", {} {}", pty.c_type(), p.name));
+            self.var_hints.push((m.line, p.name.clone(), pty.clone()));
             fctx.declare(&p.name, pty);
         }
 
@@ -327,7 +351,7 @@ impl<'a> Codegen<'a> {
 
     fn gen_stmt(&mut self, fctx: &mut FnCtx, out: &mut String, s: &Stmt, ret_ty: &HType) -> CResult<()> {
         match s {
-            Stmt::Let(name, ann, init) => {
+            Stmt::Let(name, ann, init, line) => {
                 let init = init.as_ref().ok_or_else(|| {
                     format!("error: 'let {}' needs an initializer", name)
                 })?;
@@ -337,6 +361,7 @@ impl<'a> Codegen<'a> {
                     None => ity,
                 };
                 out.push_str(&format!("    {} {} = {};\n", declty.c_type(), name, icode));
+                self.var_hints.push((*line, name.clone(), declty.clone()));
                 fctx.declare(name, declty);
                 Ok(())
             }
