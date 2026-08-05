@@ -1,1 +1,5 @@
+/target
 /compiler/target
+/lsp/target
+result
+result-*

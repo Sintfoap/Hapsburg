@@ -18,11 +18,14 @@ inheritance graph, and a C code generator. It is not a toy interpreter —
 `ferdinand file.hb -o out` produces a native binary.
 
 ```
-cd compiler
-cargo build --release
-./target/release/ferdinand ../examples/aoc2017/day1.hb -o /tmp/day1
+cargo build --release             # builds the whole workspace from the repo root
+./target/release/ferdinand examples/aoc2017/day1.hb -o /tmp/day1
 /tmp/day1
 ```
+
+Or, with Nix: `nix develop` for a shell with the right Rust toolchain and
+`cc` on `PATH`, or `nix run . -- examples/aoc2017/day1.hb -o /tmp/day1` to
+run it without installing anything. See **Development** below.
 
 All three of the AoC 2017 examples originally sketched out in prose (Days
 1–3) are implemented for real in `examples/aoc2017/` and produce correct
@@ -211,17 +214,54 @@ finding than the original chart: **the dispatch mechanism was never the
 expensive part; the naive collection representation is.** A real v2 would
 fix `hb_string_chars` before touching dispatch again.
 
+## Development
+
+The repo is a Cargo workspace (`ferdinand` the compiler, `hapsburg-lsp` the
+language server) with a Nix flake wrapping it:
+
+```
+nix develop                 # rustc, cargo, clippy, rustfmt, rust-analyzer, and cc on PATH
+cargo build --workspace     # or just use plain cargo once you're in the shell
+nix build                   # produces ./result/bin/{ferdinand,hapsburg-lsp}
+nix run . -- file.hb -o out
+```
+
+`ferdinand` shells out to `cc` at *runtime* (it compiles the C it
+generates), which is why the flake wraps both binaries with `cc` on
+`PATH` rather than only making it available at build time.
+
+Without Nix, any recent stable Rust toolchain (`cargo build --release`
+from the repo root) and a C compiler on `PATH` are all you need.
+
+## Editor support
+
+- **Neovim syntax highlighting**: `editors/nvim/` — traditional Vim
+  syntax rules (no tree-sitter grammar to compile) for filetype
+  detection and highlighting of `.hb` files. See `editors/nvim/README.md`
+  for install instructions.
+- **LSP**: `lsp/` — `hapsburg-lsp`, a minimal language server that runs
+  the real compiler's parser and resolver in-memory and publishes
+  `InbreedingError`, the founder/diamond/genetic-diversity checks, and
+  the "single line of descent" warnings as live diagnostics. Diagnostics
+  only for now (no completion/hover) — see `lsp/README.md` for what it
+  does and doesn't cover, and the `nvim-lspconfig` snippet to wire it up.
+
 ## Repo layout
 
 ```
-compiler/           the ferdinand compiler (Rust)
-  src/lexer.rs       tokenizer
-  src/parser.rs      recursive-descent parser -> AST
-  src/ast.rs         AST types
-  src/resolve.rs     C3 linearization, founder/diamond/genetic-diversity checks
-  src/codegen.rs     per-class method monomorphization -> C
-  src/main.rs        CLI: parse -> resolve -> codegen -> cc
+Cargo.toml           workspace root (members: compiler, lsp)
+compiler/            the ferdinand compiler (Rust)
+  src/lexer.rs        tokenizer
+  src/parser.rs       recursive-descent parser -> AST
+  src/ast.rs          AST types
+  src/resolve.rs      C3 linearization, founder/diamond/genetic-diversity checks
+  src/codegen.rs      per-class method monomorphization -> C
+  src/lib.rs          exposes the above as a library (used by both main.rs and lsp/)
+  src/main.rs         CLI: parse -> resolve -> codegen -> cc
+lsp/                 hapsburg-lsp, a diagnostics-only language server
 runtime/             the C runtime ferdinand-generated code links against
 examples/aoc2017/    Advent of Code 2017 Days 1-3, real working programs
 examples/negative/   programs that are supposed to fail to compile, and do
+editors/nvim/        Neovim filetype detection + syntax highlighting
+flake.nix            Nix dev shell + package (wraps both binaries with `cc` on PATH)
 ```

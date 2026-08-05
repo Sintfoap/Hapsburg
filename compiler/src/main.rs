@@ -1,12 +1,7 @@
-mod ast;
-mod codegen;
-mod lexer;
-mod parser;
-mod resolve;
-
-use ast::Program;
-use codegen::Codegen;
-use resolve::Resolver;
+use ferdinand::ast::Program;
+use ferdinand::codegen::Codegen;
+use ferdinand::parser;
+use ferdinand::resolve::Resolver;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
