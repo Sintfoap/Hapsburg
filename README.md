@@ -1,0 +1,227 @@
+# Hapsburg
+
+A compiled programming language where the only way to create anything is to
+inherit from something. Multiple inheritance is mandatory. The diamond
+problem is not solved, it's the primary debugging experience. This repo is
+a feasibility exploration: does that premise survive contact with a real
+compiler, and can it be made to run fast?
+
+The short answer: yes to both, with real caveats documented below.
+
+## What's actually here
+
+`ferdinand`, a compiler written in Rust that transpiles `.hb` source to C
+and shells out to `cc -O2`. It is a real, working, from-scratch compiler:
+lexer, recursive-descent parser, a resolver that performs genuine
+[C3 linearization](https://en.wikipedia.org/wiki/C3_linearization) over the
+inheritance graph, and a C code generator. It is not a toy interpreter —
+`ferdinand file.hb -o out` produces a native binary.
+
+```
+cd compiler
+cargo build --release
+./target/release/ferdinand ../examples/aoc2017/day1.hb -o /tmp/day1
+/tmp/day1
+```
+
+All three of the AoC 2017 examples originally sketched out in prose (Days
+1–3) are implemented for real in `examples/aoc2017/` and produce correct
+answers. `examples/negative/` contains three programs that are *supposed*
+to fail to compile, demonstrating the type system's actual behavior rather
+than just asserting it in a pitch.
+
+## The core idea, made real
+
+Every dynasty (class) is declared with `descends` (`extends`, but it wants
+multiple parents), fields are `traits`, and instances are `birth()`'d
+rather than `new`'d. A class with no parents must say so explicitly
+(`founder`); everything else must have at least one ancestor.
+
+```
+dynasty AdventOfCode::Y2017::Day1 descends Puzzle::Solution {
+    override offset() -> Integer {
+        return 1
+    }
+    override solve() -> Integer {
+        // ...
+    }
+}
+
+dynasty AdventOfCode::Y2017::Day1::PartTwo descends AdventOfCode::Y2017::Day1 {
+    override offset() -> Integer {
+        return self.input.length / 2
+    }
+}
+```
+
+`solve()` is never redeclared in `PartTwo` — it's inherited untouched, and
+overriding the one trait it depends on (`offset`) is enough to get Part 2's
+behavior. That's `examples/aoc2017/day1.hb`, and it prints the correct `3`
+and `6`.
+
+### C3 flattening, not runtime dispatch
+
+The performance question from the original design conversation was: do you
+resolve multiple-inheritance conflicts at every method call (cheap to
+build, expensive to run), or once at compile time (expensive to build,
+cheap to run)? This compiler always takes the second path, because the
+whole program is compiled as one closed-world unit — there's no separate
+compilation, so nothing is unknown at codegen time.
+
+Concretely: for every class that's actually `birth()`'d, `ferdinand`
+computes its C3 linearization, resolves every trait and method to a single
+winning definition, and then generates **one dedicated C function per
+resolved method, monomorphized for that exact class** — even for methods
+the class never wrote itself. When `PartTwo::solve()`'s body (inherited
+from `Day1`) calls `self.offset()`, the generated code is a direct call to
+`hb__AdventOfCode__Y2017__Day1__PartTwo__offset`, not `Day1`'s version —
+correct override semantics with zero vtables, zero function pointers, and
+zero runtime dispatch cost anywhere in the program. You can see this for
+yourself:
+
+```
+ferdinand examples/aoc2017/day1.hb -o /tmp/day1 --emit-c
+```
+
+This is a real instance of the tradeoff the original chat only drew as an
+illustrative chart: whole-program devirtualization is cheap to get when
+there's no separate compilation to preserve, and the price is paid at
+compile time (more generated code — one copy of every inherited method per
+concrete class) rather than at runtime. `--show-pedigree` prints the
+linearization ferdinand computed for each class, e.g.:
+
+```
+ferdinand: pedigree of 'AdventOfCode::Y2017::Day1::PartTwo': AdventOfCode::Y2017::Day1::PartTwo -> AdventOfCode::Y2017::Day1 -> Puzzle::Solution
+```
+
+### InbreedingError is a real, thrown compile error
+
+The joke was always that the diamond problem should be the primary
+debugging challenge, not a footnote. It is: `resolve.rs` implements
+standard C3 merge, and when it fails (the classic inconsistent-MRO case —
+two ancestors demanded in incompatible orders), `ferdinand` reports a real
+`InbreedingError` naming the conflicting lines of descent, before any code
+is generated:
+
+```
+$ ferdinand examples/negative/diamond_conflict.hb -o /tmp/x
+InbreedingError: line 24: cannot reconcile the ancestry of 'E' — conflicting
+lines of succession among A, B. Pedigree so far: []
+```
+
+`examples/negative/abstract_birth.hb` shows the other compile-time check
+that actually matters: you cannot `birth()` a dynasty that still has an
+unimplemented `abstract` method anywhere in its resolved method table.
+`examples/negative/no_genetic_diversity.hb` demonstrates the pitch's
+"fully connected inheritance graph" refusal — worth reading the comment in
+that file, because it's less trivial than it sounds: a *plain* single-line
+chain is always a total order (every class comparable to every other), so
+naively checking "is the graph fully connected" would reject nearly all
+ordinary single-inheritance programs. The check only fires when the
+program actually uses multiple inheritance somewhere and *still* ends up
+fully connected — i.e. the extra parent didn't bring in a new bloodline.
+
+## Language reference (v1)
+
+| Syntax | Meaning |
+|---|---|
+| `dynasty X descends A, B` | class declaration; multiple parents allowed and normal |
+| `founder` | marks a class with no parents (required if it has none) |
+| `trait name: Type [= default]` | a field |
+| `override name(params) -> Type { ... }` | method; body can be `abstract` |
+| `birth(Class, field: value, ...)` | construct an instance |
+| `succession over EXPR as NAME { }` | foreach; also accepts `Habsburg::Range::infinite()`, `Habsburg::Range::up_to(n)`, and `LIST.indices` |
+| `claim COND { } contested { }` | if / else |
+| `assassinate(ExceptionName, reason: "...")` | terminate with a runtime error |
+| `self` | the current instance (always statically typed — see below) |
+
+Types: `Integer`, `String`, `Bool`, `List<Integer>`, `List<String>`,
+`List<List<Integer>>`, and dynasty types. `Habsburg::Accumulator` (a
+`seed:`-birthed running total with `.absorb()`/`.value`) is a compiler
+intrinsic, not a user-space dynasty, in this version.
+
+## What's real vs. what's future work
+
+The original pitch had more surface area than a feasibility spike needed
+to cover. Implemented for real:
+
+- Mandatory multiple inheritance, `founder`, C3 linearization, `InbreedingError`
+- Compile-time flattening / per-class method monomorphization (real devirtualization)
+- The "no genetic diversity" refusal
+- A working type checker for the language's small type surface
+- A real C runtime (lists, strings, `Integer::parse`, `Habsburg::Accumulator`)
+
+Deliberately deferred, because they add real complexity for no payoff on
+the three AoC examples that anchored this spike:
+
+- **The refcounted / `cause_of_death` memory model.** v1 never frees
+  anything — every `birth()` is a `malloc` with process lifetime. Fine for
+  a short-lived CLI puzzle solver, not fine for a long-running program.
+  `Hemophilia` (leaked cycles) and `assassinate()`-as-manual-free are
+  unimplemented.
+- **`dominant`/`recessive` trait conflict semantics.** Currently every
+  conflict resolves the same way method resolution does: most-derived
+  definition wins, full stop. The pitch's idea of traits that only
+  "express" when inherited through *both* parent lines is a genuinely
+  different (and more work to implement correctly) mechanic.
+- **`abdicate` / `Regency` deprecation shims, `super` calls.**
+- **Real generics.** `List<T>` is three hand-specialized container types
+  (`List<Integer>`, `List<String>`, `List<List<Integer>>`), not a real
+  generic — adequate for the examples, not for a general-purpose language.
+- **Runtime polymorphism.** Every expression's type is statically known to
+  be one concrete class; there's no way to hold a supertype-typed
+  reference to different subtype instances and dispatch dynamically. This
+  is *why* full devirtualization is free here — the moment you need
+  heterogeneous collections of a common ancestor, you need either a real
+  vtable fallback or whole-program specialization at every call site, and
+  that's the "naive vs. flattened" tradeoff the original chat's charts
+  gestured at without ever building either side.
+- **The regional stdlib naming (`Habsburg::Netherlands`, etc.), `Habsburg::Spain`/`Austria` collections.**
+
+## What we actually learned about performance
+
+The original conversation's performance charts were explicitly invented —
+"illustrative, not benchmarked... there's no real Hapsburg compiler to
+profile." There is now, so here's one real measurement instead of a
+plausible-looking radar chart.
+
+Day 1's algorithm run over a 3,000,000-digit synthetic input, compiled
+with `cc -O2`, compared to the equivalent straight-line Python loop:
+
+| | user CPU time |
+|---|---|
+| `ferdinand`-compiled binary | ~0.16–0.24s |
+| CPython 3 (equivalent loop) | ~0.49s |
+
+(Wall-clock time on this measurement was noisy — dominated by sandbox
+syscall overhead unrelated to the program — so user CPU time is the
+comparable number here, not wall time.)
+
+The compiled binary wins, but not by as much as "AOT-compiled to C" ought
+to win, and the reason is instructive: `self.input.chars().map(...)`
+allocates one heap string *per character* (3 million small `malloc`s) in
+v1's `hb_string_chars`, because the runtime represents `List<String>` as
+an array of individually-heap-allocated C strings rather than, say, a
+packed byte buffer with borrowed slices. The C3-flattening /
+devirtualization story is real and is exactly as cheap as claimed — every
+method call in the generated code is a direct call, confirmed by reading
+the emitted C. But it doesn't matter if the standard library sitting on
+top of it allocates carelessly. That's a more honest and more useful
+finding than the original chart: **the dispatch mechanism was never the
+expensive part; the naive collection representation is.** A real v2 would
+fix `hb_string_chars` before touching dispatch again.
+
+## Repo layout
+
+```
+compiler/           the ferdinand compiler (Rust)
+  src/lexer.rs       tokenizer
+  src/parser.rs      recursive-descent parser -> AST
+  src/ast.rs         AST types
+  src/resolve.rs     C3 linearization, founder/diamond/genetic-diversity checks
+  src/codegen.rs     per-class method monomorphization -> C
+  src/main.rs        CLI: parse -> resolve -> codegen -> cc
+runtime/             the C runtime ferdinand-generated code links against
+examples/aoc2017/    Advent of Code 2017 Days 1-3, real working programs
+examples/negative/   programs that are supposed to fail to compile, and do
+```
