@@ -10,11 +10,30 @@ compiler, and can it be made to run fast?
 
 The short answer: yes to both, with real caveats documented below.
 
-**Docs:** this README covers the pitch and the highlights. For the full
-picture: [`docs/SPEC.md`](docs/SPEC.md) is the language specification
-(grammar, type system, every builtin, every diagnostic message) and
-[`docs/DESIGN.md`](docs/DESIGN.md) is the architecture rationale (why
-each major decision was made, and an honest list of known gaps).
+## Status
+
+Hapsburg is a real, working compiler, not a prototype with gaps in the
+happy path. `ferdinand file.hb -o out` runs source through a real
+C3-linearizing resolver and whole-program per-class method
+monomorphization (see [The core idea, made real](#the-core-idea-made-real)
+below) down to a native binary via `cc`; all three AoC 2017 Days 1–3 from
+the original pitch run end-to-end against piped stdin and match known
+answers (`examples/aoc2017/`), and three negative examples prove the type
+system's actual failure modes instead of just asserting them
+(`examples/negative/`). `hapsburg-lsp` adds real hover, document symbols,
+go-to-definition, and completion on top of the same compiler code — not a
+reimplementation (see [Editor support](#editor-support) below). 56 tests
+(`cargo test --workspace`) and CI enforce all of this on every push — see
+the badge at the top. [`TODO.md`](TODO.md) has the phase-by-phase history
+and an honest list of what's still missing.
+
+**Docs:** this README covers the pitch and the highlights.
+[`docs/SPEC.md`](docs/SPEC.md) is the language specification (grammar,
+type system, every builtin, every diagnostic message);
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the architecture
+rationale (why each major decision was made, and an honest list of known
+gaps); [`docs/CHEATSHEET.md`](docs/CHEATSHEET.md) is a one-page quick
+reference once you already know the language and just want a lookup.
 
 ## What's actually here
 
@@ -33,7 +52,7 @@ echo 1122 | /tmp/day1
 
 Or, with Nix: `nix develop` for a shell with the right Rust toolchain and
 `cc` on `PATH`, or `nix run . -- examples/aoc2017/day1.hb -o /tmp/day1` to
-run it without installing anything. See **Development** below.
+run it without installing anything. See [Development](#development) below.
 
 All three of the AoC 2017 examples originally sketched out in prose (Days
 1–3) are implemented for real in `examples/aoc2017/` and produce correct
@@ -300,7 +319,7 @@ Two layers, both real (nothing here is mocked):
   known Advent of Code answers, plus that every `examples/negative/`
   program fails to compile with the right message. This is the layer
   that exercises the real end-to-end path — see
-  [`docs/DESIGN.md`](docs/DESIGN.md#testing-strategy) for a bug during
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#11-testing-strategy) for a bug during
   this project's own development that only this layer would have caught.
 
 `.github/workflows/ci.yml` runs all of the above (plus a build) on every
@@ -343,7 +362,9 @@ examples/negative/   programs that are supposed to fail to compile (or, in one
                      documented case, fail in a known-bad way), and do
 editors/nvim/        Neovim filetype detection + syntax highlighting
 docs/SPEC.md         the language specification: grammar, types, semantics, diagnostics
-docs/DESIGN.md       architecture rationale, tradeoffs, and known gaps
+docs/ARCHITECTURE.md the architecture rationale, tradeoffs, and known gaps
+docs/CHEATSHEET.md   one-page quick reference
 .github/workflows/   CI: build, test, clippy, fmt on every push/PR
 flake.nix            Nix dev shell + package (wraps both binaries with `cc` on PATH)
+TODO.md              phase-by-phase history and the roadmap
 ```

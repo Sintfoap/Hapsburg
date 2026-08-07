@@ -134,7 +134,7 @@ fn no_genetic_diversity_is_rejected() {
     );
 }
 
-/// Pins the known gap documented in docs/DESIGN.md: `self` inside a
+/// Pins the known gap documented in docs/ARCHITECTURE.md: `self` inside a
 /// `.map(|x| ...)` lambda isn't caught at the Hapsburg level, so it
 /// surfaces as a raw C compiler error instead of a clean diagnostic.
 /// This test exists so that gap stays exactly as understood rather than

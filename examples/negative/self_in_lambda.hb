@@ -1,4 +1,4 @@
-// Known gap (see docs/DESIGN.md "Known gaps"): a `.map(|x| ...)` lambda
+// Known gap (see docs/ARCHITECTURE.md "Known gaps"): a `.map(|x| ...)` lambda
 // compiles to a `static` C helper function that only takes the element
 // parameter -- there's no `self` in scope there at the C level, even
 // though the Hapsburg-level type checker happily tracks `self`'s type

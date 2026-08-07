@@ -1,13 +1,74 @@
-# Design notes
+# Hapsburg Architecture & Technical Design
 
 This document is the *why* behind [`SPEC.md`](SPEC.md)'s *what*: the
-architecture of `ferdinand`, the tradeoffs each major decision made, and
-an honest accounting of what's still rough. If a claim here needs
+architecture of `ferdinand` and `hapsburg-lsp`, the tradeoffs each major
+decision made, and an honest accounting of what's still rough. See
+[`../TODO.md`](../TODO.md) for how the project got here phase by phase; this
+document is the technical design, not the history. If a claim here needs
 grounding, it should point at either a source file or a test — anything
-else is exactly the kind of unverified handwaving this project set out
-to replace (see "Where this started" below).
+else is exactly the kind of unverified handwaving this project set out to
+replace (§3).
 
-## Where this started
+## 1. Pipeline
+
+```
+ .hb source
+      │
+      ▼
+ ┌────────┐   tokens   ┌────────┐    AST    ┌──────────┐  Resolved   ┌─────────┐   C source   ┌────┐
+ │ Lexer  │ ─────────▶ │ Parser │ ─────────▶ │ Resolver │ ──────────▶ │ Codegen │ ───────────▶ │ cc │ ──▶ native binary
+ └────────┘             └────────┘            └──────────┘             └─────────┘              └────┘
+ lexer.rs               parser.rs              resolve.rs               codegen.rs
+                         ast.rs                 (C3 linearization,       (per-class method
+                                                  founder/diamond/         monomorphization)
+                                                  genetic-diversity
+                                                  checks)
+```
+
+No bytecode, no separate compilation: `ferdinand` reads the whole program,
+resolves the entire inheritance graph, and emits one C translation unit
+per invocation, then calls `cc -O2` on it. Every stage above is a plain
+module in the `ferdinand` library crate (`compiler/src/lib.rs`), which
+both the `ferdinand` binary and `hapsburg-lsp` depend on — see §7.
+
+## 2. Crate layout
+
+```
+Hapsburg/
+├── compiler/                 # the ferdinand compiler
+│   ├── src/
+│   │   ├── lexer.rs           # source text -> token stream
+│   │   ├── ast.rs              # AST node definitions
+│   │   ├── parser.rs            # token stream -> AST (recursive descent)
+│   │   ├── resolve.rs            # C3 linearization + structural checks
+│   │   ├── codegen.rs             # Resolved -> C (§4)
+│   │   ├── lib.rs                  # exposes the above; used by main.rs and lsp/
+│   │   └── main.rs                  # CLI: parse -> resolve -> codegen -> cc
+│   └── tests/golden.rs        # end-to-end: compile+run every example
+├── lsp/                      # hapsburg-lsp (§7)
+│   └── src/
+│       ├── analysis.rs        # runs the real pipeline in-memory, no cc
+│       ├── docs_static.rs      # keyword/builtin hover text
+│       └── main.rs              # tower-lsp wiring
+├── runtime/                  # hapsburg_runtime.{h,c} -- what generated C links against
+├── examples/
+│   ├── aoc2017/               # real, working Advent of Code 2017 solutions
+│   └── negative/              # programs that are supposed to fail, and do
+├── editors/nvim/             # filetype detection + syntax highlighting
+└── docs/
+    ├── SPEC.md                # the language: grammar, types, semantics (source of truth)
+    ├── ARCHITECTURE.md        # this file
+    └── CHEATSHEET.md          # one-page quick reference
+```
+
+`resolve.rs` and `codegen.rs` never import each other's internals beyond
+the `Resolved` struct `resolve.rs` exposes — `Codegen` only ever calls
+`Resolver::resolve`/`linearize`, never reaches into its private
+`lin_cache`. This is what makes `lsp/src/analysis.rs` able to reuse both
+independently (call `resolve()` for hover data without ever running
+`Codegen`, or run `Codegen` without needing its own copy of the C3 logic).
+
+## 3. Where this started
 
 Hapsburg began as a bit in a chat conversation: a language pitch where
 "everything is inheritance" is taken to its logical, uncomfortable
@@ -19,42 +80,15 @@ there's no real Hapsburg compiler to profile."
 
 This repository exists because someone asked what happens if you actually
 build the compiler that chart pretended to have profiled. The honest
-answer, worked out across the commits in this repo: the core joke has
-real, sound language-design content (C3 linearization is a real,
+answer, worked out phase by phase (see [`TODO.md`](../TODO.md)): the core
+joke has real, sound language-design content (C3 linearization is a real,
 implementable algorithm; whole-program monomorphization really can give
 you zero-vtable dispatch), and that content survives contact with a real
 toolchain a lot better than the surrounding decoration does. What follows
 documents the actual tradeoffs made getting there, not the ones a chart
 could gesture at.
 
-## Pipeline overview
-
-```
-.hb source
-   │  lexer.rs      — hand-written, line-tracked, no column tracking (see "Known gaps")
-   ▼
-tokens
-   │  parser.rs     — recursive descent, no backtracking needed (LL(1) after
-   │                  postfix-loop handling for calls/method-calls/indexing)
-   ▼
-AST (ast.rs)
-   │  resolve.rs    — C3 linearization, founder/diamond/genetic-diversity checks
-   ▼
-Resolver + per-class Resolved (flattened trait/method tables)
-   │  codegen.rs    — one C function per resolved method PER CONCRETE CLASS
-   ▼
-C source + runtime/hapsburg_runtime.{h,c}
-   │  cc -O2
-   ▼
-native binary
-```
-
-Every stage is a plain function/struct in the `ferdinand` library crate
-(`compiler/src/lib.rs`), which both the `ferdinand` binary and
-`hapsburg-lsp` depend on — see "The LSP reuses the compiler, not a
-reimplementation" below.
-
-## Why transpile to C, not a bytecode VM or LLVM
+## 4. Why transpile to C, not a bytecode VM or LLVM
 
 Three real options were on the table for "compiled and fast": a bytecode
 VM, an LLVM backend, or transpiling to C and calling `cc`. C was chosen
@@ -74,7 +108,7 @@ well. For a project whose actual output is three AoC solutions and a
 point about C3 linearization, none of that complexity was buying
 anything.
 
-## Whole-program monomorphization: the load-bearing design decision
+## 5. Whole-program monomorphization: the load-bearing design decision
 
 The original chat's performance chart drew a line between "naive
 Hapsburg" (resolve inheritance conflicts at every method call) and
@@ -84,9 +118,8 @@ worth stating precisely: **the whole program is compiled as one
 closed-world unit.** There is no separate compilation, no dynamic
 loading, and — this is the part that actually matters — no way in
 Hapsburg's current type system to hold a variable whose static type is a
-*supertype* while it points at a *subtype* instance at runtime (see
-"What this forecloses" below). Every expression's concrete type is known
-at compile time, full stop.
+*supertype* while it points at a *subtype* instance at runtime (§5.1).
+Every expression's concrete type is known at compile time, full stop.
 
 Given that, `Codegen::gen_class` does something a bit unusual: for a
 class `C`, it doesn't just generate code for the methods `C` itself
@@ -118,7 +151,7 @@ shared implementation reached through indirection. This is exactly the
 the original chat's chart predicted — except now it's a real,
 inspectable property of real generated C instead of a guess.
 
-### What this forecloses
+### 5.1 What this forecloses
 
 The reason whole-program monomorphization is *free* here is precisely
 the reason it's not a general solution: Hapsburg has no way to write "a
@@ -128,12 +161,11 @@ type, always. Adding real runtime polymorphism — a heterogeneous
 collection dispatched dynamically — would need either a real vtable
 fallback for that one case, or specializing every call site that touches
 such a collection, which is a fundamentally different (and much larger)
-project than this one. This is deliberately out of scope for v1; see
-"What's real vs. deferred" below.
+project than this one. This is deliberately out of scope for v1; see §9.
 
-## The resolver
+## 6. The resolver
 
-### Why C3, not "just pick the first match"
+### 6.1 Why C3, not "just pick the first match"
 
 The pitch's original text described diamond conflicts as "resolved via a
 real, specified algorithm (call it C3 linearization with flavor text)."
@@ -146,7 +178,7 @@ instead of a string that only appears in documentation.
 is entirely in the error message layered on top when it fails
 (`resolve::Resolver::linearize`).
 
-### The genetic-diversity check's real subtlety
+### 6.2 The genetic-diversity check's real subtlety
 
 The pitch's "no genetic diversity, refusing to compile" line reads like
 a throwaway joke, but implementing it honestly surfaced a real
@@ -168,7 +200,7 @@ into her own bloodline" framing in that file's comment isn't just
 flavor — it's a precise description of the shape needed to trigger the
 check).
 
-### Override resolution: simpler than the pitch, on purpose
+### 6.3 Override resolution: simpler than the pitch, on purpose
 
 The original pitch also described `dominant`/`recessive` trait markers —
 a trait only "expressing" if inherited through *both* parent lines,
@@ -181,7 +213,7 @@ definition arrived through, not just linearization order, which is a
 materially different (and more complex) resolution algorithm. The
 three AoC examples never needed it, so it stayed out of v1.
 
-## The type system: `List<T>` and `marry`
+## 7. The type system: `List<T>` and `marry`
 
 `List<Integer>`, `List<String>`, and `List<List<Integer>>` are three
 hand-written C structs (`HbListInt`/`HbListStr`/`HbListListInt`), not a
@@ -205,7 +237,7 @@ and `codegen::tests::marry_unsupported_pair_is_an_error` for what
 happens outside it. Extending the table (e.g. `Bool<->Integer`) is a
 one-line addition to that `match`, not a new code path.
 
-## The LSP reuses the compiler, not a reimplementation
+## 8. `hapsburg-lsp` reuses the compiler, not a reimplementation
 
 `hapsburg-lsp`'s diagnostics, hover, symbols, and go-to-definition are
 all backed directly by `ferdinand`'s own `parser`/`resolve`/`codegen`
@@ -220,25 +252,25 @@ specifically so local-variable hover could report a *real* inferred
 type rather than a guess (see `Codegen::var_hints`,
 `codegen::tests::hapsburg_display_matches_source_syntax`).
 
-### Degrading gracefully instead of going blank
+### 8.1 Degrading gracefully instead of going blank
 
-The CLI stops at the first hard error, by design (§"Diagnostics
-reference" in `SPEC.md`) — a single-error-at-a-time compiler is a
-reasonable choice for a batch tool. It's a bad choice for an editor:
-while you're mid-edit, most of the file is probably fine and one broken
-class shouldn't blank out hover everywhere else. So `analyze()`
-deliberately does *not* mirror the CLI's stop-at-first-error behavior:
-it calls `Resolver::linearize`/`resolve` independently for every declared
-class regardless of whether `check_all()` (used only to generate the
-diagnostic list) succeeded, and it keeps calling `Codegen::gen_class` for
-every birthed class even after one fails, collecting one diagnostic per
-failure instead of stopping at the first. `analysis::tests::
+The CLI stops at the first hard error, by design (`SPEC.md` §9) — a
+single-error-at-a-time compiler is a reasonable choice for a batch tool.
+It's a bad choice for an editor: while you're mid-edit, most of the file
+is probably fine and one broken class shouldn't blank out hover
+everywhere else. So `analyze()` deliberately does *not* mirror the CLI's
+stop-at-first-error behavior: it calls `Resolver::linearize`/`resolve`
+independently for every declared class regardless of whether
+`check_all()` (used only to generate the diagnostic list) succeeded, and
+it keeps calling `Codegen::gen_class` for every birthed class even after
+one fails, collecting one diagnostic per failure instead of stopping at
+the first. `analysis::tests::
 one_classs_inbreeding_error_does_not_block_others_resolution` locks this
 in against a shrunk version of `examples/negative/diamond_conflict.hb`:
 `E`'s `InbreedingError` produces a diagnostic, but `A` and `B` still get
 full resolved hover data in the same response.
 
-### Word-under-cursor, not a position→AST-node index
+### 8.2 Word-under-cursor, not a position→AST-node index
 
 Hover/definition/completion resolve a document position by extracting
 the identifier text at that column via a straightforward text scan
@@ -258,9 +290,9 @@ the wrong one. Threading real spans through the whole `Expr` enum would
 fix this properly; it wasn't done because it's a much larger, more
 invasive change than the value it adds for programs this size (see
 `lsp/README.md`'s own "what it doesn't do" section for the same point
-from the user-facing side).
+from the user-facing side, and §9 below).
 
-## Memory model: honest about what isn't there
+## 9. Memory model: honest about what isn't there
 
 The original pitch spent real ink on a reference-counted memory model
 with a logged `cause_of_death` per object and a `Hemophilia` class of
@@ -286,10 +318,11 @@ happen to share a "the runtime's data representations are naive" root
 cause; fixing the representation doesn't require fixing the lifetime
 story, and vice versa.
 
-## Known gaps
+## 10. Known gaps
 
 Collected in one place, each with a pointer to where it's exercised or
-could be:
+could be. See [`TODO.md`](../TODO.md) for these framed as forward-looking
+work items rather than a design retrospective.
 
 - **`self` inside a `.map(|x| ...)` lambda produces a raw C error, not a
   Hapsburg diagnostic.** The Hapsburg-level type checker happily tracks
@@ -304,9 +337,9 @@ could be:
   regression test for the *current* (undesirable) behavior, so a future
   fix has to deliberately update it rather than silently changing shape
   unnoticed. The clean fix is either threading `self` through as a
-  second parameter when a lambda
-  body references it, or rejecting `self` inside lambda bodies with a
-  real Hapsburg-level error at `gen_map`'s lambda branch.
+  second parameter when a lambda body references it, or rejecting `self`
+  inside lambda bodies with a real Hapsburg-level error at `gen_map`'s
+  lambda branch.
 - **`heir name descends Type = expr` doesn't check `Type` against
   `expr`'s inferred type.** `Codegen::gen_stmt`'s `Stmt::Heir` arm uses
   the explicit annotation's type for the generated C declaration
@@ -317,7 +350,7 @@ could be:
   silently wrong C that only `cc` itself catches (as a warning, not an
   error, so the build still "succeeds"). The fix is a straightforward
   type-equality check next to where `birth`'s already lives; scoped out
-  of this pass because it surfaced late, during writing this document,
+  of this pass because it surfaced late, while writing this document,
   not because it's hard.
 - **No `super`.** The very first pitch text used `super.reign()`; it
   never made it into the three AoC examples that anchored the actual
@@ -335,15 +368,15 @@ could be:
   and every codegen error site — the largest single mechanical change
   available, for a project whose current programs are all small enough
   that line-level precision hasn't actually caused confusion yet.
-- **No runtime polymorphism, no `super`, no `dominant`/`recessive`
-  traits, no `abdicate`/`Regency` deprecation shims, no refcounted memory
-  model, no regional stdlib renaming (`Habsburg::Netherlands` etc.)** —
-  all covered above or in `SPEC.md`; listed here again as one flat list
+- **No runtime polymorphism, no `dominant`/`recessive` traits, no
+  `abdicate`/`Regency` deprecation shims, no refcounted memory model, no
+  regional stdlib renaming (`Habsburg::Netherlands` etc.)** — all
+  covered above or in `SPEC.md`; listed here again as one flat list
   because "what's not built yet" is exactly the kind of question this
   file exists to answer without making someone reconstruct it from
   commit history.
 
-## Testing strategy
+## 11. Testing strategy
 
 Three layers, each catching a different class of regression:
 

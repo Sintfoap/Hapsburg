@@ -6,7 +6,7 @@ abstract standard with multiple conforming compilers in mind — where the
 compiler's actual behavior and this document disagree, the compiler's
 behavior is a bug in one of the two, and the fix is whichever makes them
 agree without breaking `examples/`. For the *why* behind these choices, see
-[`DESIGN.md`](DESIGN.md); this document is the *what*.
+[`ARCHITECTURE.md`](ARCHITECTURE.md); this document is the *what*.
 
 Every claim below is backed by a test in `compiler/src/*.rs` (`#[cfg(test)]
 mod tests`) or `compiler/tests/golden.rs`. If you find a discrepancy
@@ -51,7 +51,7 @@ the compiler special-cases them by *name* during codegen (see §6), not by
 tokenizing them differently. Practically this means a user-defined method
 or dynasty named e.g. `print` will shadow the builtin's parse-time
 recognition in confusing ways; don't do that (nothing currently stops you
-at compile time — see [`DESIGN.md`](DESIGN.md) for why this wasn't worth
+at compile time — see [`ARCHITECTURE.md`](ARCHITECTURE.md) for why this wasn't worth
 solving generically).
 
 ### 1.5 Punctuation and operators
@@ -145,7 +145,8 @@ Concrete types: `Integer` (i64), `String` (owned `char*`), `Bool` (C
 **There is no other `List<T>`.** `List<Bool>`, `List<YourDynasty>`, and any
 other instantiation are compile errors — these three are hand-specialized
 C container structs (`HbListInt`, `HbListStr`, `HbListListInt`), not real
-generics. See [`DESIGN.md`](DESIGN.md) §"What's real vs. deferred".
+generics. See the main [`README.md`](../README.md#whats-real-vs-whats-future-work)
+for the full real-vs-deferred list.
 
 **Every type-relating position uses `descends`**, not `:` — this is the
 central design conceit carried all the way through the grammar, not just
@@ -176,7 +177,7 @@ subexpressions' already-known types, in the same traversal that emits C
 - A `heir`, `trait`, or parameter's type is either the explicit
   `descends Type` annotation or the initializer/no-annotation-available
   inferred type; **the two are never cross-checked against each other**
-  for `heir` (see known gaps in [`DESIGN.md`](DESIGN.md)) but *are*
+  for `heir` (see known gaps in [`ARCHITECTURE.md`](ARCHITECTURE.md)) but *are*
   checked for `trait`s provided via `birth(...)`.
 - Arithmetic/comparison operators require `Integer` operands (except `==`
   /`!=`, which also accept two `String`s, compiled to `strcmp`, or two
@@ -255,7 +256,7 @@ to least-derived. The **first** declaration of a given trait or method
 name encountered wins — this is the entirety of the override rule. There
 is no `dominant`/`recessive` distinction and no way for a less-derived
 declaration to "win" over a more-derived one that names the same member
-(see [`DESIGN.md`](DESIGN.md) for the pitch feature this deliberately
+(see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the pitch feature this deliberately
 simplifies away).
 
 A dynasty can be `birth()`'d only if every method in its resolved table
@@ -337,7 +338,7 @@ generated non-`Void` function additionally gets a defensive zero-valued
 `return` appended after its body, so a `claim`/`contested` that doesn't
 cover every path (or a call to `hb_assassinate` the compiler doesn't
 prove is `noreturn`) can't leave a C function without a `return` on some
-path — see [`DESIGN.md`](DESIGN.md) for why this is a deliberate
+path — see [`ARCHITECTURE.md`](ARCHITECTURE.md) for why this is a deliberate
 simplification rather than real flow analysis.
 
 ### 5.6 Assignment
@@ -353,7 +354,7 @@ generated — never a supertype. This is true even for a method whose
 *body* is textually inherited unchanged from an ancestor: the compiler
 generates a fresh copy of that method for every concrete class, and
 `self` (and therefore every `self.foo()` call inside it) refers to that
-leaf class throughout. See §6 and [`DESIGN.md`](DESIGN.md) for what this
+leaf class throughout. See §6 and [`ARCHITECTURE.md`](ARCHITECTURE.md) for what this
 buys and what it forecloses (no runtime polymorphism).
 
 Using `self` outside a dynasty method (i.e. in top-level/`main` code) is
@@ -415,21 +416,21 @@ either:
   generated C helper function has no `self` parameter, so `cc` fails
   with `'self' undeclared` — a raw C compiler error leaking through
   instead of a clean Hapsburg diagnostic. Don't reference `self` inside
-  a `.map(|x| ...)` lambda. See [`DESIGN.md`](DESIGN.md).
+  a `.map(|x| ...)` lambda. See [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## 7. Memory and execution model
 
 - Every `birth()` and every intermediate list/string allocation is
   `malloc`, with **process lifetime — nothing is ever freed.** There is
   no garbage collector and no refcounting. Fine for the short CLI
-  programs this version targets; see [`DESIGN.md`](DESIGN.md) for the
+  programs this version targets; see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
   refcounted `cause_of_death` model this deliberately doesn't implement.
 - `List<T>` values (`HbListInt`/`HbListStr`/`HbListListInt`) are 24-byte
   header structs (pointer + length + capacity) passed and returned **by
   value** — cheap to copy, sharing the underlying heap buffer, similar to
   a slice/fat-pointer.
 - Dispatch is always a direct C function call. See §4.3/§5.7 and
-  [`DESIGN.md`](DESIGN.md) for the whole-program monomorphization
+  [`ARCHITECTURE.md`](ARCHITECTURE.md) for the whole-program monomorphization
   strategy that makes this possible with no vtables.
 
 ## 8. Compiler invocation
