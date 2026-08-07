@@ -108,7 +108,9 @@ pub fn analyze(text: &str) -> DocAnalysis {
     let program = match parser::parse(text) {
         Ok(p) => p,
         Err(e) => {
-            result.diagnostics.push(diagnostic(&e, DiagnosticSeverity::ERROR));
+            result
+                .diagnostics
+                .push(diagnostic(&e, DiagnosticSeverity::ERROR));
             return result;
         }
     };
@@ -116,16 +118,22 @@ pub fn analyze(text: &str) -> DocAnalysis {
     let mut resolver = match Resolver::new(&program) {
         Ok(r) => r,
         Err(e) => {
-            result.diagnostics.push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
+            result
+                .diagnostics
+                .push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
             return result;
         }
     };
 
     if let Err(e) = resolver.check_all() {
-        result.diagnostics.push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
+        result
+            .diagnostics
+            .push(diagnostic(&e.0, DiagnosticSeverity::ERROR));
     }
     for w in resolver.warnings() {
-        result.diagnostics.push(diagnostic(w, DiagnosticSeverity::WARNING));
+        result
+            .diagnostics
+            .push(diagnostic(w, DiagnosticSeverity::WARNING));
     }
 
     let names: Vec<String> = resolver.classes.keys().cloned().collect();
@@ -177,11 +185,15 @@ pub fn analyze(text: &str) -> DocAnalysis {
     let birthed = cg.discover_birthed(&program);
     for class in &birthed {
         if let Err(e) = cg.gen_class(class) {
-            result.diagnostics.push(diagnostic(&e, DiagnosticSeverity::ERROR));
+            result
+                .diagnostics
+                .push(diagnostic(&e, DiagnosticSeverity::ERROR));
         }
     }
     if let Err(e) = cg.gen_main(&program) {
-        result.diagnostics.push(diagnostic(&e, DiagnosticSeverity::ERROR));
+        result
+            .diagnostics
+            .push(diagnostic(&e, DiagnosticSeverity::ERROR));
     }
 
     let mut seen = HashSet::new();
@@ -194,4 +206,126 @@ pub fn analyze(text: &str) -> DocAnalysis {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn errors(a: &DocAnalysis) -> Vec<&Diagnostic> {
+        a.diagnostics
+            .iter()
+            .filter(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+            .collect()
+    }
+
+    #[test]
+    fn well_formed_program_has_no_error_diagnostics() {
+        let a = analyze(
+            "dynasty Puzzle::Solution founder {
+                 trait input descends String
+                 override solve() -> Integer { abstract }
+             }
+             dynasty Day1 descends Puzzle::Solution {
+                 override solve() -> Integer { return 1 }
+             }",
+        );
+        assert!(errors(&a).is_empty(), "unexpected errors: {:?}", errors(&a));
+    }
+
+    #[test]
+    fn class_info_reports_founder_parents_and_pedigree() {
+        let a = analyze(
+            "dynasty A founder { override f() -> Integer { abstract } }
+             dynasty B descends A { override f() -> Integer { return 1 } }",
+        );
+        let b = a.classes.get("B").expect("B should be present");
+        assert!(!b.founder);
+        assert_eq!(b.parents, vec!["A"]);
+        assert_eq!(b.pedigree, vec!["B", "A"]);
+
+        let f = b
+            .methods
+            .iter()
+            .find(|m| m.name == "f")
+            .expect("f should be resolved");
+        assert!(!f.is_abstract);
+        assert_eq!(f.owner, "B");
+        assert!(f.sig_display.contains("-> Integer"));
+    }
+
+    #[test]
+    fn trait_display_uses_descends_not_a_colon() {
+        let a = analyze("dynasty A founder { trait input descends String }");
+        let t = &a.classes["A"].traits[0];
+        assert_eq!(t.ty_display, "String");
+    }
+
+    #[test]
+    fn heir_locals_are_captured_as_var_hints_with_real_inferred_types() {
+        let a = analyze(
+            "dynasty A founder {
+                 trait input descends String
+                 override solve() -> Integer {
+                     heir digits descends List<Integer> = self.input.chars().map(marry(Integer))
+                     return digits.length
+                 }
+             }
+             heir x = birth(A, input: \"12\")
+             print(x.solve())",
+        );
+        assert!(errors(&a).is_empty(), "unexpected errors: {:?}", errors(&a));
+        let hint = a
+            .var_hints
+            .iter()
+            .find(|(_, name, _)| name == "digits")
+            .expect("digits should have a recorded var hint");
+        assert_eq!(hint.2, "List<Integer>");
+    }
+
+    #[test]
+    fn syntax_error_yields_a_single_diagnostic_and_no_classes() {
+        let a = analyze("dynasty A founder {");
+        assert_eq!(a.diagnostics.len(), 1);
+        assert!(a.classes.is_empty());
+    }
+
+    /// The behavior this whole module exists for: a genuine InbreedingError
+    /// on one class must not blank out hover/symbol data for well-formed
+    /// classes elsewhere in the same file. Mirrors
+    /// examples/negative/diamond_conflict.hb.
+    #[test]
+    fn one_classs_inbreeding_error_does_not_block_others_resolution() {
+        let a = analyze(
+            "dynasty A founder { override common() -> Integer { return 1 } }
+             dynasty B founder { override common() -> Integer { return 2 } }
+             dynasty C descends A, B { }
+             dynasty D descends B, A { }
+             dynasty E descends C, D { }",
+        );
+
+        assert!(
+            errors(&a)
+                .iter()
+                .any(|d| d.message.contains("InbreedingError")),
+            "expected an InbreedingError diagnostic, got: {:?}",
+            a.diagnostics
+        );
+
+        let a_info = &a.classes["A"];
+        assert_eq!(a_info.pedigree, vec!["A"]);
+        assert_eq!(a_info.methods.len(), 1);
+
+        let e_info = &a.classes["E"];
+        assert!(
+            e_info.pedigree.is_empty(),
+            "E failed to linearize, so it should have no pedigree, got {:?}",
+            e_info.pedigree
+        );
+        assert_eq!(
+            e_info.parents,
+            vec!["C", "D"],
+            "structural info (parents) survives even when linearization fails"
+        );
+    }
 }

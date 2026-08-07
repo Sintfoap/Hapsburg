@@ -78,16 +78,28 @@ pub struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     pub fn new(src: &'a str) -> Self {
-        Lexer { src: src.as_bytes(), pos: 0, line: 1 }
+        Lexer {
+            src: src.as_bytes(),
+            pos: 0,
+            line: 1,
+        }
     }
 
     fn peek(&self) -> u8 {
-        if self.pos < self.src.len() { self.src[self.pos] } else { 0 }
+        if self.pos < self.src.len() {
+            self.src[self.pos]
+        } else {
+            0
+        }
     }
 
     fn peek_at(&self, off: usize) -> u8 {
         let p = self.pos + off;
-        if p < self.src.len() { self.src[p] } else { 0 }
+        if p < self.src.len() {
+            self.src[p]
+        } else {
+            0
+        }
     }
 
     fn bump(&mut self) -> u8 {
@@ -121,7 +133,10 @@ impl<'a> Lexer<'a> {
             self.skip_trivia();
             let line = self.line;
             if self.pos >= self.src.len() {
-                out.push(SpannedTok { tok: Tok::Eof, line });
+                out.push(SpannedTok {
+                    tok: Tok::Eof,
+                    line,
+                });
                 break;
             }
             let c = self.peek();
@@ -255,7 +270,10 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     Tok::NotEq
                 } else {
-                    return Err(format!("line {}: unexpected '!' (use 'not' is unsupported; only '!=' is valid)", self.line));
+                    return Err(format!(
+                        "line {}: unexpected '!' (use 'not' is unsupported; only '!=' is valid)",
+                        self.line
+                    ));
                 }
             }
             b'<' => {
@@ -282,5 +300,86 @@ impl<'a> Lexer<'a> {
             }
         };
         Ok(tok)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(src: &str) -> Vec<Tok> {
+        Lexer::new(src)
+            .tokenize()
+            .expect("test source should tokenize")
+            .into_iter()
+            .map(|st| st.tok)
+            .collect()
+    }
+
+    #[test]
+    fn keywords_are_recognized() {
+        assert_eq!(
+            toks("dynasty descends founder trait override abstract birth heir"),
+            vec![
+                Tok::Dynasty,
+                Tok::Descends,
+                Tok::Founder,
+                Tok::Trait,
+                Tok::Override,
+                Tok::Abstract,
+                Tok::Birth,
+                Tok::Heir,
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn colon_colon_is_one_token_not_two_colons() {
+        assert_eq!(
+            toks("Habsburg::Accumulator"),
+            vec![
+                Tok::Ident("Habsburg".to_string()),
+                Tok::ColonColon,
+                Tok::Ident("Accumulator".to_string()),
+                Tok::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn arrow_is_one_token_not_minus_then_gt() {
+        assert_eq!(toks("->"), vec![Tok::Arrow, Tok::Eof]);
+    }
+
+    #[test]
+    fn string_literal_handles_escapes() {
+        let t = toks(r#""a\nb\"c""#);
+        assert_eq!(t, vec![Tok::StrLit("a\nb\"c".to_string()), Tok::Eof]);
+    }
+
+    #[test]
+    fn integer_literal() {
+        assert_eq!(toks("42"), vec![Tok::IntLit(42), Tok::Eof]);
+    }
+
+    #[test]
+    fn line_comment_is_skipped() {
+        assert_eq!(
+            toks("heir // trailing comment\nreturn"),
+            vec![Tok::Heir, Tok::Return, Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn line_numbers_track_newlines() {
+        let spanned = Lexer::new("heir\nx\n=\n1").tokenize().unwrap();
+        let lines: Vec<usize> = spanned.iter().map(|s| s.line).collect();
+        assert_eq!(lines, vec![1, 2, 3, 4, 4]); // heir, x, =, 1, Eof
+    }
+
+    #[test]
+    fn bare_exclamation_is_rejected() {
+        assert!(Lexer::new("!").tokenize().is_err());
     }
 }

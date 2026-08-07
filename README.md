@@ -1,5 +1,7 @@
 # Hapsburg
 
+[![CI](https://github.com/Sintfoap/Hapsburg/actions/workflows/ci.yml/badge.svg)](https://github.com/Sintfoap/Hapsburg/actions/workflows/ci.yml)
+
 A compiled programming language where the only way to create anything is to
 inherit from something. Multiple inheritance is mandatory. The diamond
 problem is not solved, it's the primary debugging experience. This repo is
@@ -7,6 +9,12 @@ a feasibility exploration: does that premise survive contact with a real
 compiler, and can it be made to run fast?
 
 The short answer: yes to both, with real caveats documented below.
+
+**Docs:** this README covers the pitch and the highlights. For the full
+picture: [`docs/SPEC.md`](docs/SPEC.md) is the language specification
+(grammar, type system, every builtin, every diagnostic message) and
+[`docs/DESIGN.md`](docs/DESIGN.md) is the architecture rationale (why
+each major decision was made, and an honest list of known gaps).
 
 ## What's actually here
 
@@ -270,6 +278,34 @@ generates), which is why the flake wraps both binaries with `cc` on
 Without Nix, any recent stable Rust toolchain (`cargo build --release`
 from the repo root) and a C compiler on `PATH` are all you need.
 
+## Testing
+
+```
+cargo test --workspace       # 56 tests: unit + end-to-end, no manual setup needed
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Two layers, both real (nothing here is mocked):
+
+- **Unit tests** (`#[cfg(test)] mod tests` inside `lexer.rs`, `parser.rs`,
+  `resolve.rs`, `codegen.rs`, and `lsp/src/analysis.rs`) — fast,
+  algorithm-focused. The C3 linearization tests cover the textbook
+  diamond, the classic inconsistent-MRO failure, and an edge case that's
+  easy to confuse with the genetic-diversity check (see the test module
+  comments in `resolve.rs`).
+- **Golden/integration tests** (`compiler/tests/golden.rs`) — actually
+  invoke the `ferdinand` binary, actually call `cc`, actually run the
+  resulting binary with piped stdin, and assert exact output against
+  known Advent of Code answers, plus that every `examples/negative/`
+  program fails to compile with the right message. This is the layer
+  that exercises the real end-to-end path — see
+  [`docs/DESIGN.md`](docs/DESIGN.md#testing-strategy) for a bug during
+  this project's own development that only this layer would have caught.
+
+`.github/workflows/ci.yml` runs all of the above (plus a build) on every
+push and pull request — that's what the badge at the top tracks.
+
 ## Editor support
 
 - **Neovim syntax highlighting**: `editors/nvim/` — traditional Vim
@@ -298,10 +334,16 @@ compiler/            the ferdinand compiler (Rust)
   src/codegen.rs      per-class method monomorphization -> C
   src/lib.rs          exposes the above as a library (used by both main.rs and lsp/)
   src/main.rs         CLI: parse -> resolve -> codegen -> cc
-lsp/                 hapsburg-lsp, a diagnostics-only language server
+  tests/golden.rs     end-to-end tests: compile+run every example, check exact output
+lsp/                 hapsburg-lsp, a language server (diagnostics, hover, symbols,
+                     go-to-definition, completion) -- see lsp/README.md
 runtime/             the C runtime ferdinand-generated code links against
 examples/aoc2017/    Advent of Code 2017 Days 1-3, real working programs
-examples/negative/   programs that are supposed to fail to compile, and do
+examples/negative/   programs that are supposed to fail to compile (or, in one
+                     documented case, fail in a known-bad way), and do
 editors/nvim/        Neovim filetype detection + syntax highlighting
+docs/SPEC.md         the language specification: grammar, types, semantics, diagnostics
+docs/DESIGN.md       architecture rationale, tradeoffs, and known gaps
+.github/workflows/   CI: build, test, clippy, fmt on every push/PR
 flake.nix            Nix dev shell + package (wraps both binaries with `cc` on PATH)
 ```

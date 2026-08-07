@@ -17,7 +17,10 @@ impl Backend {
     async fn set_text_and_publish(&self, uri: Url, text: String) {
         let analysis = analysis::analyze(&text);
         let diags = analysis.diagnostics.clone();
-        self.docs.lock().unwrap().insert(uri.clone(), (text, analysis));
+        self.docs
+            .lock()
+            .unwrap()
+            .insert(uri.clone(), (text, analysis));
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 
@@ -63,7 +66,10 @@ fn word_at(text: &str, pos: Position) -> Option<(String, Range)> {
     }
     Some((
         trimmed.to_string(),
-        Range::new(Position::new(pos.line, start as u32), Position::new(pos.line, end as u32)),
+        Range::new(
+            Position::new(pos.line, start as u32),
+            Position::new(pos.line, end as u32),
+        ),
     ))
 }
 
@@ -76,7 +82,10 @@ fn class_hover(info: &analysis::ClassInfo) -> String {
         s.push_str(&format!("  \ndescends `{}`", info.parents.join("`, `")));
     }
     if info.pedigree.len() > 1 {
-        s.push_str(&format!("\n\n**Pedigree:** `{}`", info.pedigree.join(" -> ")));
+        s.push_str(&format!(
+            "\n\n**Pedigree:** `{}`",
+            info.pedigree.join(" -> ")
+        ));
     }
     if !info.traits.is_empty() {
         s.push_str("\n\n**Traits:**\n");
@@ -104,7 +113,7 @@ fn class_hover(info: &analysis::ClassInfo) -> String {
 /// Which class/method "contains" a line, approximated from declaration
 /// start lines only (the AST has no end positions) — the class/method
 /// whose start line is the closest one at-or-before `line`.
-fn enclosing_class<'a>(analysis: &'a DocAnalysis, line: u32) -> Option<&'a analysis::ClassInfo> {
+fn enclosing_class(analysis: &DocAnalysis, line: u32) -> Option<&analysis::ClassInfo> {
     analysis
         .class_order
         .iter()
@@ -129,11 +138,17 @@ fn hover_text(analysis: &DocAnalysis, word: &str, line: u32) -> Option<String> {
         .filter(|(l, n, _)| *l <= line && n == word)
         .max_by_key(|(l, _, _)| *l)
     {
-        return Some(format!("```\nheir {} descends {}\n```\n*(local binding)*", name, ty));
+        return Some(format!(
+            "```\nheir {} descends {}\n```\n*(local binding)*",
+            name, ty
+        ));
     }
     if let Some(class) = enclosing_class(analysis, line) {
         if let Some(t) = class.traits.iter().find(|t| t.name == word) {
-            return Some(format!("`trait {} descends {}`\n\ntrait of `{}`", t.name, t.ty_display, class.name));
+            return Some(format!(
+                "`trait {} descends {}`\n\ntrait of `{}`",
+                t.name, t.ty_display, class.name
+            ));
         }
         if let Some(m) = class.methods.iter().find(|m| m.name == word) {
             let mut s = format!("`{}`", m.sig_display);
@@ -154,7 +169,9 @@ impl LanguageServer for Backend {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -179,12 +196,14 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.set_text_and_publish(params.text_document.uri, params.text_document.text).await;
+        self.set_text_and_publish(params.text_document.uri, params.text_document.text)
+            .await;
     }
 
     async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
         if let Some(change) = params.content_changes.pop() {
-            self.set_text_and_publish(params.text_document.uri, change.text).await;
+            self.set_text_and_publish(params.text_document.uri, change.text)
+                .await;
         }
     }
 
@@ -205,26 +224,41 @@ impl LanguageServer for Backend {
             let (word, range) = word_at(text, pos)?;
             let content = hover_text(analysis, &word, pos.line)?;
             Some(Hover {
-                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: content }),
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: content,
+                }),
                 range: Some(range),
             })
         });
         Ok(result.flatten())
     }
 
-    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
         let result = self.with_doc(&uri, |text, analysis| {
             let (word, _) = word_at(text, pos)?;
             let class = analysis.classes.get(&word)?;
-            let range = Range::new(Position::new(class.line, 0), Position::new(class.line, u32::MAX));
-            Some(GotoDefinitionResponse::Scalar(Location::new(uri.clone(), range)))
+            let range = Range::new(
+                Position::new(class.line, 0),
+                Position::new(class.line, u32::MAX),
+            );
+            Some(GotoDefinitionResponse::Scalar(Location::new(
+                uri.clone(),
+                range,
+            )))
         });
         Ok(result.flatten())
     }
 
-    async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
         let result = self.with_doc(&uri, |text, analysis| {
             let total_lines = text.lines().count() as u32;
@@ -233,9 +267,12 @@ impl LanguageServer for Backend {
             let mut symbols = Vec::new();
             for (i, (start, name)) in order.iter().enumerate() {
                 let end = order.get(i + 1).map(|(l, _)| *l).unwrap_or(total_lines);
-                let Some(info) = analysis.classes.get(name) else { continue };
+                let Some(info) = analysis.classes.get(name) else {
+                    continue;
+                };
                 let range = Range::new(Position::new(*start, 0), Position::new(end, 0));
-                let selection = Range::new(Position::new(*start, 0), Position::new(*start, u32::MAX));
+                let selection =
+                    Range::new(Position::new(*start, 0), Position::new(*start, u32::MAX));
 
                 let mut children = Vec::new();
                 for t in &info.traits {
@@ -258,13 +295,21 @@ impl LanguageServer for Backend {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: name.clone(),
-                    detail: if info.founder { Some("founder".to_string()) } else { None },
+                    detail: if info.founder {
+                        Some("founder".to_string())
+                    } else {
+                        None
+                    },
                     kind: SymbolKind::CLASS,
                     tags: None,
                     deprecated: None,
                     range,
                     selection_range: selection,
-                    children: if children.is_empty() { None } else { Some(children) },
+                    children: if children.is_empty() {
+                        None
+                    } else {
+                        Some(children)
+                    },
                 });
             }
             DocumentSymbolResponse::Nested(symbols)
@@ -308,7 +353,12 @@ impl LanguageServer for Backend {
     }
 }
 
-fn make_symbol(name: &str, detail: Option<String>, kind: SymbolKind, range: Range) -> DocumentSymbol {
+fn make_symbol(
+    name: &str,
+    detail: Option<String>,
+    kind: SymbolKind,
+    range: Range,
+) -> DocumentSymbol {
     #[allow(deprecated)]
     DocumentSymbol {
         name: name.to_string(),

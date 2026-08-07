@@ -34,14 +34,22 @@ fn parse_args() -> Result<Options, String> {
             "--emit-c" => emit_c = true,
             "--keep-build-dir" => keep_build_dir = true,
             "--show-pedigree" => show_pedigree = true,
-            other if other.starts_with('-') => return Err(format!("error: unknown flag '{}'", other)),
+            other if other.starts_with('-') => {
+                return Err(format!("error: unknown flag '{}'", other))
+            }
             other => inputs.push(PathBuf::from(other)),
         }
     }
     if inputs.is_empty() {
         return Err("usage: ferdinand <file1.hb> [file2.hb ...] -o <output>".to_string());
     }
-    Ok(Options { inputs, output, emit_c, keep_build_dir, show_pedigree })
+    Ok(Options {
+        inputs,
+        output,
+        emit_c,
+        keep_build_dir,
+        show_pedigree,
+    })
 }
 
 fn main() {
@@ -57,12 +65,17 @@ fn run() -> Result<(), String> {
     let mut dynasties = Vec::new();
     let mut main_stmts = Vec::new();
     for path in &opts.inputs {
-        let src = fs::read_to_string(path).map_err(|e| format!("error: cannot read '{}': {}", path.display(), e))?;
-        let prog: Program = parser::parse(&src).map_err(|e| format!("{}: {}", path.display(), e))?;
+        let src = fs::read_to_string(path)
+            .map_err(|e| format!("error: cannot read '{}': {}", path.display(), e))?;
+        let prog: Program =
+            parser::parse(&src).map_err(|e| format!("{}: {}", path.display(), e))?;
         dynasties.extend(prog.dynasties);
         main_stmts.extend(prog.main_stmts);
     }
-    let program = Program { dynasties, main_stmts };
+    let program = Program {
+        dynasties,
+        main_stmts,
+    };
 
     let mut resolver = Resolver::new(&program).map_err(|e| e.0)?;
     resolver.check_all().map_err(|e| e.0)?;
@@ -75,17 +88,26 @@ fn run() -> Result<(), String> {
     for class in &birthed {
         if opts.show_pedigree {
             let resolved = resolver.resolve(class).map_err(|e| e.0)?;
-            eprintln!("ferdinand: pedigree of '{}': {}", class, resolved.linearization.join(" -> "));
+            eprintln!(
+                "ferdinand: pedigree of '{}': {}",
+                class,
+                resolved.linearization.join(" -> ")
+            );
         }
-        cg.gen_class(class).map_err(|e| format!("ferdinand: {}", e))?;
+        cg.gen_class(class)
+            .map_err(|e| format!("ferdinand: {}", e))?;
     }
-    let main_fn = cg.gen_main(&program).map_err(|e| format!("ferdinand: {}", e))?;
+    let main_fn = cg
+        .gen_main(&program)
+        .map_err(|e| format!("ferdinand: {}", e))?;
 
     let mut c_src = String::new();
     c_src.push_str("#include \"hapsburg_runtime.h\"\n\n");
     c_src.push_str("/* ---- flattened dynasty structs ---- */\n");
     c_src.push_str(&cg.structs);
-    c_src.push_str("\n/* ---- method table (one direct function per resolved method per class) ---- */\n");
+    c_src.push_str(
+        "\n/* ---- method table (one direct function per resolved method per class) ---- */\n",
+    );
     c_src.push_str(&cg.func_decls);
     c_src.push('\n');
     c_src.push_str(&cg.func_impls);

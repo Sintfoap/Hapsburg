@@ -125,8 +125,16 @@ pub enum Stmt {
     Heir(String, Option<Type>, Option<Expr>, usize),
     Assign(Expr, Expr),
     ExprStmt(Expr),
-    Succession { iter: Expr, binder: Option<String>, body: Vec<Stmt> },
-    Claim { cond: Expr, then_body: Vec<Stmt>, else_body: Option<Vec<Stmt>> },
+    Succession {
+        iter: Expr,
+        binder: Option<String>,
+        body: Vec<Stmt>,
+    },
+    Claim {
+        cond: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Option<Vec<Stmt>>,
+    },
     Return(Option<Expr>),
     Abstract,
 }

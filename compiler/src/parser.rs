@@ -49,7 +49,11 @@ impl Parser {
                 self.bump();
                 Ok(s)
             }
-            other => Err(format!("line {}: expected identifier, found {:?}", self.line(), other)),
+            other => Err(format!(
+                "line {}: expected identifier, found {:?}",
+                self.line(),
+                other
+            )),
         }
     }
 
@@ -63,7 +67,10 @@ impl Parser {
                 main_stmts.push(self.parse_stmt()?);
             }
         }
-        Ok(Program { dynasties, main_stmts })
+        Ok(Program {
+            dynasties,
+            main_stmts,
+        })
     }
 
     fn parse_path(&mut self) -> PResult<Path> {
@@ -113,11 +120,24 @@ impl Parser {
             match self.cur() {
                 Tok::Trait => traits.push(self.parse_trait()?),
                 Tok::Override => methods.push(self.parse_method()?),
-                other => return Err(format!("line {}: expected 'trait' or 'override' in dynasty body, found {:?}", self.line(), other)),
+                other => {
+                    return Err(format!(
+                        "line {}: expected 'trait' or 'override' in dynasty body, found {:?}",
+                        self.line(),
+                        other
+                    ))
+                }
             }
         }
         self.expect(&Tok::RBrace)?;
-        Ok(Dynasty { name, parents, founder, traits, methods, line })
+        Ok(Dynasty {
+            name,
+            parents,
+            founder,
+            traits,
+            methods,
+            line,
+        })
     }
 
     fn parse_trait(&mut self) -> PResult<Trait> {
@@ -132,7 +152,12 @@ impl Parser {
         } else {
             None
         };
-        Ok(Trait { name, ty, default, line })
+        Ok(Trait {
+            name,
+            ty,
+            default,
+            line,
+        })
     }
 
     fn parse_method(&mut self) -> PResult<Method> {
@@ -163,7 +188,13 @@ impl Parser {
         } else {
             MethodBody::Block(stmts)
         };
-        Ok(Method { name, params, ret, body, line })
+        Ok(Method {
+            name,
+            params,
+            ret,
+            body,
+            line,
+        })
     }
 
     fn parse_param(&mut self) -> PResult<Param> {
@@ -232,7 +263,11 @@ impl Parser {
                 } else {
                     None
                 };
-                Ok(Stmt::Claim { cond, then_body, else_body })
+                Ok(Stmt::Claim {
+                    cond,
+                    then_body,
+                    else_body,
+                })
             }
             Tok::Return => {
                 self.bump();
@@ -474,7 +509,11 @@ impl Parser {
                     Ok(Expr::PathExpr(p))
                 }
             }
-            other => Err(format!("line {}: unexpected token {:?} in expression", self.line(), other)),
+            other => Err(format!(
+                "line {}: unexpected token {:?} in expression",
+                self.line(),
+                other
+            )),
         }
     }
 }
@@ -482,4 +521,165 @@ impl Parser {
 pub fn parse(src: &str) -> PResult<Program> {
     let toks = crate::lexer::Lexer::new(src).tokenize()?;
     Parser::new(toks).parse_program()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_founder_dynasty_with_a_trait_and_abstract_method() {
+        let prog = parse(
+            "dynasty Puzzle::Solution founder {
+                 trait input descends String
+                 override solve() -> Integer {
+                     abstract
+                 }
+             }",
+        )
+        .unwrap();
+        assert_eq!(prog.dynasties.len(), 1);
+        let d = &prog.dynasties[0];
+        assert_eq!(d.name.joined(), "Puzzle::Solution");
+        assert!(d.founder);
+        assert!(d.parents.is_empty());
+        assert_eq!(d.traits.len(), 1);
+        assert_eq!(d.traits[0].name, "input");
+        assert_eq!(d.methods.len(), 1);
+        assert!(matches!(d.methods[0].body, MethodBody::Abstract));
+    }
+
+    #[test]
+    fn parses_multiple_parents_in_declaration_order() {
+        let prog = parse("dynasty C descends A, B { }").unwrap();
+        let d = &prog.dynasties[0];
+        assert!(!d.founder);
+        assert_eq!(
+            d.parents.iter().map(|p| p.joined()).collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
+    }
+
+    #[test]
+    fn trait_default_and_generic_list_type() {
+        let prog = parse(
+            "dynasty A founder {
+                 trait xs descends List<List<Integer>> = 0
+             }",
+        )
+        .unwrap();
+        let t = &prog.dynasties[0].traits[0];
+        assert!(t.default.is_some());
+        match &t.ty {
+            Type::Generic(outer, inner) => {
+                assert_eq!(outer.joined(), "List");
+                match inner.as_ref() {
+                    Type::Generic(mid, innermost) => {
+                        assert_eq!(mid.joined(), "List");
+                        assert_eq!(innermost.to_string(), "Integer");
+                    }
+                    other => panic!("expected nested List, got {:?}", other),
+                }
+            }
+            other => panic!("expected List<...>, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn heir_statement_with_and_without_explicit_type() {
+        let prog = parse(
+            "heir a = 1
+             heir b descends Integer = 2",
+        )
+        .unwrap();
+        assert_eq!(prog.main_stmts.len(), 2);
+        match &prog.main_stmts[0] {
+            Stmt::Heir(name, ty, init, _) => {
+                assert_eq!(name, "a");
+                assert!(ty.is_none());
+                assert!(init.is_some());
+            }
+            other => panic!("expected Heir, got {:?}", other),
+        }
+        match &prog.main_stmts[1] {
+            Stmt::Heir(name, ty, _, _) => {
+                assert_eq!(name, "b");
+                assert_eq!(ty.as_ref().unwrap().to_string(), "Integer");
+            }
+            other => panic!("expected Heir, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn binary_operator_precedence_multiplication_before_addition() {
+        let prog = parse("heir x = 1 + 2 * 3").unwrap();
+        match &prog.main_stmts[0] {
+            Stmt::Heir(_, _, Some(Expr::Binary(BinOp::Add, lhs, rhs)), _) => {
+                assert!(matches!(**lhs, Expr::Int(1)));
+                assert!(matches!(**rhs, Expr::Binary(BinOp::Mul, _, _)));
+            }
+            other => panic!("expected 1 + (2 * 3), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn method_call_chain_and_index() {
+        let prog = parse("heir x = digits.chars().map(marry(Integer))[0]").unwrap();
+        assert!(matches!(
+            prog.main_stmts[0],
+            Stmt::Heir(_, _, Some(Expr::Index(_, _)), _)
+        ));
+    }
+
+    #[test]
+    fn claim_contested_and_succession_parse() {
+        let prog = parse(
+            "dynasty A founder {
+                 override f() -> Integer {
+                     succession over x as i {
+                         claim i == 0 {
+                             return 1
+                         } contested {
+                             return 2
+                         }
+                     }
+                     return 0
+                 }
+             }",
+        )
+        .unwrap();
+        let MethodBody::Block(stmts) = &prog.dynasties[0].methods[0].body else {
+            panic!("expected a block body")
+        };
+        assert!(matches!(stmts[0], Stmt::Succession { .. }));
+    }
+
+    #[test]
+    fn lambda_argument_to_map() {
+        let prog = parse("heir x = xs.map(|v| v)").unwrap();
+        match &prog.main_stmts[0] {
+            Stmt::Heir(_, _, Some(Expr::MethodCall(_, name, args)), _) => {
+                assert_eq!(name, "map");
+                assert!(matches!(args[0], Arg::Positional(Expr::Lambda(..))));
+            }
+            other => panic!("expected a .map(|v| ...) call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn birth_with_named_args() {
+        let prog = parse("heir x = birth(Habsburg::Accumulator, seed: 0)").unwrap();
+        match &prog.main_stmts[0] {
+            Stmt::Heir(_, _, Some(Expr::Birth(path, args)), _) => {
+                assert_eq!(path.joined(), "Habsburg::Accumulator");
+                assert!(matches!(&args[0], Arg::Named(n, _) if n == "seed"));
+            }
+            other => panic!("expected a birth(...) call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn missing_closing_brace_is_a_parse_error() {
+        assert!(parse("dynasty A founder {").is_err());
+    }
 }
