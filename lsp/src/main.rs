@@ -81,7 +81,7 @@ fn class_hover(info: &analysis::ClassInfo) -> String {
     if !info.traits.is_empty() {
         s.push_str("\n\n**Traits:**\n");
         for t in &info.traits {
-            s.push_str(&format!("- `{}: {}`\n", t.name, t.ty_display));
+            s.push_str(&format!("- `trait {} descends {}`\n", t.name, t.ty_display));
         }
     }
     if !info.methods.is_empty() {
@@ -129,11 +129,11 @@ fn hover_text(analysis: &DocAnalysis, word: &str, line: u32) -> Option<String> {
         .filter(|(l, n, _)| *l <= line && n == word)
         .max_by_key(|(l, _, _)| *l)
     {
-        return Some(format!("```\n{}: {}\n```\n*(local binding)*", name, ty));
+        return Some(format!("```\nheir {} descends {}\n```\n*(local binding)*", name, ty));
     }
     if let Some(class) = enclosing_class(analysis, line) {
         if let Some(t) = class.traits.iter().find(|t| t.name == word) {
-            return Some(format!("`{}: {}`\n\ntrait of `{}`", t.name, t.ty_display, class.name));
+            return Some(format!("`trait {} descends {}`\n\ntrait of `{}`", t.name, t.ty_display, class.name));
         }
         if let Some(m) = class.methods.iter().find(|m| m.name == word) {
             let mut s = format!("`{}`", m.sig_display);

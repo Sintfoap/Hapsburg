@@ -153,6 +153,60 @@ int64_t hb_string_length(const char *s) {
     return (int64_t)strlen(s);
 }
 
+/* ---- marry(): Hapsburg's type-cast operator ---- */
+
+char *hb_integer_to_string(int64_t x) {
+    /* -9223372036854775808 plus NUL is 21 bytes; 32 is comfortable. */
+    char *buf = (char *)malloc(32);
+    snprintf(buf, 32, "%lld", (long long)x);
+    return buf;
+}
+
+char *hb_bool_to_string(int b) {
+    /* Static storage is fine: the runtime never frees anything, so a
+     * literal is exactly as safe as a fresh allocation here, minus the
+     * allocation. */
+    return b ? "true" : "false";
+}
+
+/* ---- Habsburg::Correspondence: reading stdin ---- */
+
+char *hb_correspondence_receive_line(void) {
+    size_t cap = 0;
+    char *line = NULL;
+    ssize_t n = getline(&line, &cap, stdin);
+    if (n < 0) {
+        free(line);
+        char *empty = (char *)malloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    if (n > 0 && line[n - 1] == '\n') {
+        line[n - 1] = '\0';
+    }
+    return line;
+}
+
+char *hb_correspondence_receive_all(void) {
+    size_t cap = 4096;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    size_t got;
+    while ((got = fread(buf + len, 1, cap - len, stdin)) > 0) {
+        len += got;
+        if (len == cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+        }
+    }
+    buf[len] = '\0';
+    /* Trim a single trailing newline, same convention as receive_line. */
+    if (len > 0 && buf[len - 1] == '\n') {
+        buf[len - 1] = '\0';
+    }
+    return buf;
+}
+
 /* ---- misc ---- */
 
 int64_t hb_abs(int64_t x) {

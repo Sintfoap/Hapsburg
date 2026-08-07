@@ -124,7 +124,7 @@ impl Parser {
         let line = self.line();
         self.expect(&Tok::Trait)?;
         let name = self.expect_ident()?;
-        self.expect(&Tok::Colon)?;
+        self.expect(&Tok::Descends)?;
         let ty = self.parse_type()?;
         let default = if *self.cur() == Tok::Eq {
             self.bump();
@@ -168,7 +168,7 @@ impl Parser {
 
     fn parse_param(&mut self) -> PResult<Param> {
         let name = self.expect_ident()?;
-        self.expect(&Tok::Colon)?;
+        self.expect(&Tok::Descends)?;
         let ty = self.parse_type()?;
         Ok(Param { name, ty })
     }
@@ -190,11 +190,11 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> PResult<Stmt> {
         match self.cur() {
-            Tok::Let => {
+            Tok::Heir => {
                 let line = self.line();
                 self.bump();
                 let name = self.expect_ident()?;
-                let ty = if *self.cur() == Tok::Colon {
+                let ty = if *self.cur() == Tok::Descends {
                     self.bump();
                     Some(self.parse_type()?)
                 } else {
@@ -206,7 +206,7 @@ impl Parser {
                 } else {
                     None
                 };
-                Ok(Stmt::Let(name, ty, init, line))
+                Ok(Stmt::Heir(name, ty, init, line))
             }
             Tok::Succession => {
                 self.bump();

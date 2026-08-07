@@ -83,7 +83,7 @@ fn method_sig(m: &ast::Method) -> String {
     let params = m
         .params
         .iter()
-        .map(|p| format!("{}: {}", p.name, p.ty))
+        .map(|p| format!("{} descends {}", p.name, p.ty))
         .collect::<Vec<_>>()
         .join(", ");
     match &m.ret {

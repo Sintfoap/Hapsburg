@@ -10,9 +10,11 @@
 // birthed -- which is deliberately on-theme: even a plain iterative
 // algorithm gets dressed up in genealogy in Hapsburg, whether it needs it
 // or not.
+//
+// Run it: echo 1024 | ferdinand-compiled-day3   (answer: 31)
 
 dynasty Puzzle::Solution founder {
-    trait input: String
+    trait input descends String
 
     override solve() -> Integer {
         abstract
@@ -20,9 +22,9 @@ dynasty Puzzle::Solution founder {
 }
 
 dynasty AdventOfCode::Y2017::Spiral::Ring founder {
-    trait center_x: Integer = 0
-    trait center_y: Integer = 0
-    trait radius: Integer = 0
+    trait center_x descends Integer = 0
+    trait center_y descends Integer = 0
+    trait radius descends Integer = 0
 
     override walk() -> Integer {
         abstract
@@ -38,13 +40,13 @@ dynasty AdventOfCode::Y2017::Spiral::NextRing descends AdventOfCode::Y2017::Spir
 dynasty AdventOfCode::Y2017::Day3 descends Puzzle::Solution {
 
     override solve() -> Integer {
-        let target = Integer::parse(self.input)
-        let x = 0
-        let y = 0
-        let step = 1
-        let count = 1
-        let dx = 1
-        let dy = 0
+        heir target descends Integer = self.input.marry(Integer)
+        heir x = 0
+        heir y = 0
+        heir step = 1
+        heir count = 1
+        heir dx = 1
+        heir dy = 0
 
         claim target == 1 {
             return 0
@@ -90,14 +92,6 @@ dynasty AdventOfCode::Y2017::Day3 descends Puzzle::Solution {
     }
 }
 
-let day3 = birth(AdventOfCode::Y2017::Day3, input: "1")
+heir puzzle_input descends String = Habsburg::Correspondence::receive_line()
+heir day3 descends AdventOfCode::Y2017::Day3 = birth(AdventOfCode::Y2017::Day3, input: puzzle_input)
 print(day3.solve())
-
-let day3b = birth(AdventOfCode::Y2017::Day3, input: "12")
-print(day3b.solve())
-
-let day3c = birth(AdventOfCode::Y2017::Day3, input: "23")
-print(day3c.solve())
-
-let day3d = birth(AdventOfCode::Y2017::Day3, input: "1024")
-print(day3d.solve())

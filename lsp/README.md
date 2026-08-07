@@ -26,8 +26,8 @@ that always re-checks the whole file anyway.
   lists (with `(abstract)` / `— inherited from X` annotations pulled
   straight from the resolver).
 - A local variable or parameter shows its real inferred type (e.g.
-  `digits: List<Integer>`), from the same type inference codegen uses to
-  emit C — not a syntactic guess.
+  `heir digits descends List<Integer>`), from the same type inference
+  codegen uses to emit C — not a syntactic guess.
 - Keywords and builtins (`dynasty`, `succession`, `Habsburg::Accumulator`,
   etc.) get static reference docs.
 

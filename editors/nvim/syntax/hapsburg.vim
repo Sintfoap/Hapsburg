@@ -5,7 +5,7 @@ if exists("b:current_syntax")
   finish
 endif
 
-syntax keyword hapsburgKeyword dynasty descends founder trait override abstract birth let return
+syntax keyword hapsburgKeyword dynasty descends founder trait override abstract birth heir return
 syntax keyword hapsburgRepeat succession over as
 syntax keyword hapsburgConditional claim contested
 syntax keyword hapsburgBoolean true false
@@ -13,7 +13,7 @@ syntax keyword hapsburgSelf self
 syntax keyword hapsburgOperatorWord and or
 
 syntax keyword hapsburgType Integer String Bool List Void
-syntax keyword hapsburgBuiltinFunc print abs assassinate
+syntax keyword hapsburgBuiltinFunc print abs assassinate marry receive_line receive_all infinite up_to
 syntax match hapsburgNamespace "\<Habsburg\>"
 syntax keyword hapsburgException InbreedingError
 

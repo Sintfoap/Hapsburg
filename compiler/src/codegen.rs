@@ -59,6 +59,51 @@ fn is_path(e: &Expr, segs: &[&str]) -> bool {
     }
 }
 
+/// `x.marry(Type)` (or the bare `marry(Type)` form recognized specially
+/// inside `.map(...)`) — Hapsburg's type-cast operator. Marrying into your
+/// own house is a no-op (`None` = identity, use the operand unchanged);
+/// marrying into an unrelated one calls the named runtime conversion
+/// function; anything not on this list has "no legitimate marriage".
+fn marry_conversion(from: &HType, target_name: &str) -> CResult<(HType, Option<&'static str>)> {
+    let target = match target_name {
+        "Integer" => HType::Int,
+        "String" => HType::Str,
+        "Bool" => HType::Bool,
+        other => {
+            return Err(format!(
+                "error: '{}' is not a lineage anything can marry into (only Integer, String, Bool)",
+                other
+            ))
+        }
+    };
+    if *from == target {
+        return Ok((target, None));
+    }
+    match (from, &target) {
+        (HType::Str, HType::Int) => Ok((HType::Int, Some("hb_integer_parse"))),
+        (HType::Int, HType::Str) => Ok((HType::Str, Some("hb_integer_to_string"))),
+        (HType::Bool, HType::Str) => Ok((HType::Str, Some("hb_bool_to_string"))),
+        (from, _) => Err(format!(
+            "error: no legitimate marriage between {} and {}",
+            from.hapsburg_display(),
+            target.hapsburg_display()
+        )),
+    }
+}
+
+/// Pulls the bare type name out of `marry(TypeName)`'s single argument —
+/// the same restricted "just a name" position `type_of_annotation` handles
+/// for real type syntax, but marry's target is an ordinary expression
+/// (parsed via the normal call-argument grammar), so it needs its own
+/// extraction here rather than going through `Type`.
+fn marry_target_name(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Ident(s) => Some(s),
+        Expr::PathExpr(p) if p.0.len() == 1 => Some(&p.0[0]),
+        _ => None,
+    }
+}
+
 fn c_string_literal(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -114,7 +159,7 @@ pub struct Codegen<'a> {
     pub func_decls: String,
     pub func_impls: String,
     lambda_ctr: usize,
-    /// (source line, variable name, inferred type) for every `let` and
+    /// (source line, variable name, inferred type) for every `heir` and
     /// method parameter seen while generating code — recorded purely as a
     /// side channel for tooling (the LSP's hover), unused by codegen
     /// itself. Populated even for classes whose codegen later fails,
@@ -222,8 +267,8 @@ impl<'a> Codegen<'a> {
         }
         fn walk_stmt(s: &Stmt, found: &mut Vec<String>) {
             match s {
-                Stmt::Let(_, _, Some(e), _) => walk_expr(e, found),
-                Stmt::Let(_, _, None, _) => {}
+                Stmt::Heir(_, _, Some(e), _) => walk_expr(e, found),
+                Stmt::Heir(_, _, None, _) => {}
                 Stmt::Assign(l, r) => {
                     walk_expr(l, found);
                     walk_expr(r, found);
@@ -351,7 +396,7 @@ impl<'a> Codegen<'a> {
 
     fn gen_stmt(&mut self, fctx: &mut FnCtx, out: &mut String, s: &Stmt, ret_ty: &HType) -> CResult<()> {
         match s {
-            Stmt::Let(name, ann, init, line) => {
+            Stmt::Heir(name, ann, init, line) => {
                 let init = init.as_ref().ok_or_else(|| {
                     format!("error: 'let {}' needs an initializer", name)
                 })?;
@@ -602,18 +647,20 @@ impl<'a> Codegen<'a> {
     }
 
     fn gen_call(&mut self, fctx: &mut FnCtx, out: &mut String, callee: &Expr, args: &[Arg]) -> CResult<(HType, String)> {
-        if is_path(callee, &["Integer", "parse"]) {
-            if args.len() != 1 {
-                return Err("error: Integer::parse expects exactly one argument".to_string());
-            }
-            let (aty, acode) = self.gen_expr(fctx, out, arg_val(&args[0]))?;
-            if aty != HType::Str {
-                return Err("error: Integer::parse expects a String".to_string());
-            }
-            return Ok((HType::Int, format!("hb_integer_parse({})", acode)));
-        }
         if is_path(callee, &["Habsburg", "Range", "infinite"]) || is_path(callee, &["Habsburg", "Range", "up_to"]) {
             return Err("error: Habsburg::Range::* is only valid directly as a 'succession over' source".to_string());
+        }
+        if is_path(callee, &["Habsburg", "Correspondence", "receive_line"]) {
+            if !args.is_empty() {
+                return Err("error: Habsburg::Correspondence::receive_line expects no arguments".to_string());
+            }
+            return Ok((HType::Str, "hb_correspondence_receive_line()".to_string()));
+        }
+        if is_path(callee, &["Habsburg", "Correspondence", "receive_all"]) {
+            if !args.is_empty() {
+                return Err("error: Habsburg::Correspondence::receive_all expects no arguments".to_string());
+            }
+            return Ok((HType::Str, "hb_correspondence_receive_all()".to_string()));
         }
         if is_path(callee, &["print"]) {
             if args.len() != 1 {
@@ -672,6 +719,20 @@ impl<'a> Codegen<'a> {
     ) -> CResult<(HType, String)> {
         let is_self = matches!(obj, Expr::SelfExpr);
         let (oty, ocode) = self.gen_expr(fctx, out, obj)?;
+
+        if name == "marry" {
+            if args.len() != 1 {
+                return Err("error: marry(...) expects exactly one argument: the type to marry into".to_string());
+            }
+            let target_name = marry_target_name(arg_val(&args[0]))
+                .ok_or_else(|| "error: marry(...) expects a bare type name, e.g. .marry(Integer)".to_string())?;
+            let (rty, conv) = marry_conversion(&oty, target_name)?;
+            let code = match conv {
+                Some(f) => format!("{}({})", f, ocode),
+                None => ocode, // already of that lineage -- no-op
+            };
+            return Ok((rty, code));
+        }
 
         match &oty {
             HType::Class(cls) => {
@@ -751,11 +812,21 @@ impl<'a> Codegen<'a> {
         let listvar = self.materialize(fctx, out, &input_ty, &input_code);
 
         // (result element type, per-element C expression producing it from `elem`)
-        let (result_elem_ty, call_fn): (HType, String) = if is_path(func_arg, &["Integer", "parse"]) {
-            if elem_ty != HType::Str {
-                return Err("error: Integer::parse expects String elements".to_string());
+        let (result_elem_ty, call_fn): (HType, String) = if let Expr::Call(callee, cargs) = func_arg {
+            if is_path(callee, &["marry"]) && cargs.len() == 1 {
+                let target_name = marry_target_name(arg_val(&cargs[0]))
+                    .ok_or_else(|| "error: marry(...) inside map() expects a bare type name, e.g. marry(Integer)".to_string())?;
+                let (rty, conv) = marry_conversion(&elem_ty, target_name)?;
+                let f = conv.ok_or_else(|| {
+                    format!(
+                        "error: marry({}) inside map() is a no-op here — {} is already legitimate, drop the .map(...)",
+                        target_name, elem_ty.hapsburg_display()
+                    )
+                })?;
+                (rty, f.to_string())
+            } else {
+                return Err("error: map() expects marry(Type) or a |x| lambda".to_string());
             }
-            (HType::Int, "hb_integer_parse".to_string())
         } else if let Expr::Lambda(param, body) = func_arg {
             let mut lctx = FnCtx::new(fctx.leaf.clone());
             lctx.declare(param, elem_ty.clone());
@@ -768,7 +839,7 @@ impl<'a> Codegen<'a> {
             self.func_impls.push_str(&format!("{} {{\n{}    return {};\n}}\n\n", sig, lbody_out, bcode));
             (bty, fname)
         } else {
-            return Err("error: map() expects Integer::parse or a |x| lambda".to_string());
+            return Err("error: map() expects marry(Type) or a |x| lambda".to_string());
         };
 
         let result_list_ty = match result_elem_ty {

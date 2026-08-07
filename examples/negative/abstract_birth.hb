@@ -3,12 +3,12 @@
 // inherit the behavior from.
 
 dynasty Puzzle::Solution founder {
-    trait input: String
+    trait input descends String
 
     override solve() -> Integer {
         abstract
     }
 }
 
-let doomed = birth(Puzzle::Solution, input: "irrelevant")
+heir doomed descends Puzzle::Solution = birth(Puzzle::Solution, input: "irrelevant")
 print(doomed.solve())

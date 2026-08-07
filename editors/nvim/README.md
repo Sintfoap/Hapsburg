@@ -28,8 +28,8 @@ needs the path filled in.
 - `*.hb` files are recognized as filetype `hapsburg`
 - Syntax highlighting for keywords (`dynasty`, `descends`, `founder`,
   `trait`, `override`, `abstract`, `birth`, `succession`/`over`/`as`,
-  `claim`/`contested`, `let`, `return`, `self`), booleans, `List`/
-  `Integer`/`String`/`Bool`/`Void` types, `::`-qualified dynasty paths,
+  `claim`/`contested`, `heir`, `return`, `self`), booleans, `List`/
+  `Integer`/`String`/`Bool`/`Void` types, `marry`, `::`-qualified dynasty paths,
   strings, numbers, and `//` comments
 - `commentstring` set to `// %s` (so `gcc`/commenting plugins work)
 

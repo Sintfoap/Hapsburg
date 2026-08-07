@@ -2,9 +2,14 @@
 // Sum the digits that match the *next* digit in a circular list.
 // Part 2 only changes what "next" means -- which is exactly the kind of
 // change Hapsburg wants expressed as a subclass overriding one trait.
+//
+// Run it: echo 1122 | ferdinand-compiled-day1
+// (the real puzzle input is one line shared by both parts, same as the
+// actual AoC problem -- only the illustrative examples in the problem
+// text differ per part)
 
 dynasty Puzzle::Solution founder {
-    trait input: String
+    trait input descends String
 
     override solve() -> Integer {
         abstract
@@ -18,15 +23,15 @@ dynasty AdventOfCode::Y2017::Day1 descends Puzzle::Solution {
     }
 
     override solve() -> Integer {
-        let digits = self.input.chars().map(Integer::parse)
-        let n = digits.length
-        let total = birth(Habsburg::Accumulator, seed: 0)
+        heir digits descends List<Integer> = self.input.chars().map(marry(Integer))
+        heir n descends Integer = digits.length
+        heir total = birth(Habsburg::Accumulator, seed: 0)
 
         succession over digits.indices as i {
-            let current = digits[i]
-            let heir = digits[(i + self.offset()) % n]
+            heir current descends Integer = digits[i]
+            heir heir_digit descends Integer = digits[(i + self.offset()) % n]
 
-            claim current == heir {
+            claim current == heir_digit {
                 total.absorb(current)
             } contested {
                 // No match this generation -- the trait dies out here.
@@ -45,8 +50,10 @@ dynasty AdventOfCode::Y2017::Day1::PartTwo descends AdventOfCode::Y2017::Day1 {
     }
 }
 
-let day1 = birth(AdventOfCode::Y2017::Day1, input: "1122")
-print(day1.solve())
+heir puzzle_input descends String = Habsburg::Correspondence::receive_line()
 
-let day1b = birth(AdventOfCode::Y2017::Day1::PartTwo, input: "1212")
-print(day1b.solve())
+heir part1 descends AdventOfCode::Y2017::Day1 = birth(AdventOfCode::Y2017::Day1, input: puzzle_input)
+print(part1.solve())
+
+heir part2 descends AdventOfCode::Y2017::Day1::PartTwo = birth(AdventOfCode::Y2017::Day1::PartTwo, input: puzzle_input)
+print(part2.solve())

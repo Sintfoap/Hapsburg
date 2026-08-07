@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/types.h> /* ssize_t, for hb_correspondence_receive_line's getline() */
 
 /* ---- lists ---- */
 
@@ -57,6 +58,18 @@ HbListStr hb_string_chars(const char *s);
 HbListStr hb_string_lines(const char *s);
 HbListStr hb_string_split_whitespace(const char *s);
 int64_t hb_string_length(const char *s);
+
+/* ---- marry(): Hapsburg's type-cast operator ---- */
+
+char *hb_integer_to_string(int64_t x);
+char *hb_bool_to_string(int b);
+
+/* ---- Habsburg::Correspondence: reading stdin ---- */
+
+/* One line, trailing newline stripped, "" at EOF. */
+char *hb_correspondence_receive_line(void);
+/* Everything until EOF, newlines preserved (for multi-line puzzle input). */
+char *hb_correspondence_receive_all(void);
 
 /* ---- misc builtins ---- */
 

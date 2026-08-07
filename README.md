@@ -20,7 +20,7 @@ inheritance graph, and a C code generator. It is not a toy interpreter —
 ```
 cargo build --release             # builds the whole workspace from the repo root
 ./target/release/ferdinand examples/aoc2017/day1.hb -o /tmp/day1
-/tmp/day1
+echo 1122 | /tmp/day1
 ```
 
 Or, with Nix: `nix develop` for a shell with the right Rust toolchain and
@@ -124,18 +124,55 @@ ordinary single-inheritance programs. The check only fires when the
 program actually uses multiple inheritance somewhere and *still* ends up
 fully connected — i.e. the extra parent didn't bring in a new bloodline.
 
+### Inheritance, all the way down
+
+The first version of this language stopped the bit at the class level: a
+`dynasty` descended from its parents, but a local variable was just a
+mundane `let x: Type = value` — the one place in the whole file that
+looked like it belonged to any other language. That's gone. There is now
+exactly one relationship in Hapsburg for relating a name to a type,
+`descends`, and it's the same word whether the name is a whole dynasty, a
+field, a parameter, or a single local:
+
+```
+heir digits descends List<Integer> = self.input.chars().map(marry(Integer))
+heir n descends Integer = digits.length
+```
+
+`heir` replaced `let` (an heir, descending from a type, given a value —
+not a stretch, an heir is definitionally something that inherits).
+Casting got the same treatment: `Integer::parse(s)` is gone, replaced by
+`value.marry(Type)` — converting a value's type is now phrased as
+marrying it into a new bloodline, which is either the most or least
+defensible pun in the codebase depending on how charitable you're
+feeling about `Bella gerant alii, tu felix Austria, nube`. It's
+bidirectional (`n.marry(String)` round-trips), same-type marriage is a
+no-op, and an unsupported pair is refused at compile time with exactly
+the tone you'd expect: `no legitimate marriage between Bool and Integer`.
+
+Reading input followed the same instinct: `Habsburg::Correspondence::
+receive_line()` / `receive_all()` read stdin, framed as the crown
+receiving petitions from outside the realm. The AoC examples actually
+read real puzzle input now (`echo 1024 | ferdinand-compiled-day3`)
+instead of hardcoding a test string in `main` — a straightforwardly
+better demo of "the language can read input" than the pre-redesign
+version had, independent of the theming.
+
 ## Language reference (v1)
 
 | Syntax | Meaning |
 |---|---|
 | `dynasty X descends A, B` | class declaration; multiple parents allowed and normal |
 | `founder` | marks a class with no parents (required if it has none) |
-| `trait name: Type [= default]` | a field |
-| `override name(params) -> Type { ... }` | method; body can be `abstract` |
+| `trait name descends Type [= default]` | a field |
+| `override name(param descends Type, ...) -> Type { ... }` | method; body can be `abstract` |
 | `birth(Class, field: value, ...)` | construct an instance |
+| `heir name [descends Type] = expr` | local variable binding (type inferred if omitted) |
+| `value.marry(Type)` | cast `value` into `Type`; also usable bare as `marry(Type)` inside `.map(...)` |
 | `succession over EXPR as NAME { }` | foreach; also accepts `Habsburg::Range::infinite()`, `Habsburg::Range::up_to(n)`, and `LIST.indices` |
 | `claim COND { } contested { }` | if / else |
 | `assassinate(ExceptionName, reason: "...")` | terminate with a runtime error |
+| `Habsburg::Correspondence::receive_line()` / `receive_all()` | read one line / everything from stdin, both `-> String` |
 | `self` | the current instance (always statically typed — see below) |
 
 Types: `Integer`, `String`, `Bool`, `List<Integer>`, `List<String>`,
@@ -152,7 +189,7 @@ to cover. Implemented for real:
 - Compile-time flattening / per-class method monomorphization (real devirtualization)
 - The "no genetic diversity" refusal
 - A working type checker for the language's small type surface
-- A real C runtime (lists, strings, `Integer::parse`, `Habsburg::Accumulator`)
+- A real C runtime (lists, strings, `.marry()` casts, `Habsburg::Accumulator`, stdin via `Habsburg::Correspondence`)
 
 Deliberately deferred, because they add real complexity for no payoff on
 the three AoC examples that anchored this spike:
